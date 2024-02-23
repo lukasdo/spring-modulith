@@ -17,8 +17,6 @@ import java.util.stream.Collectors;
  */
 public class LocalChangesStrategy implements GitProviderStrategy {
 
-    public static final String CLASS_FILE_SUFFIX = ".java";
-    public static final String PACKAGE_PREFIX = "src.main.java";
 
     @Override
     public Set<String> getModifiedFiles() throws IOException,GitAPIException {
