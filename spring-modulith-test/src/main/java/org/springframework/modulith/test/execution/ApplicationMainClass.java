@@ -20,7 +20,8 @@ public class ApplicationMainClass {
         this.mainClass = annotatedClassFinder.findFromClass(testClass);
     }
 
-    public static ApplicationMainClass getInstance(Class<?> testClass) throws IOException, ClassNotFoundException {
+    public static ApplicationMainClass getInstance(Class<?> testClass) {
+        // What happens when in a monorepo multiple projects will be executed
         if (INSTANCE == null) {
             INSTANCE = new ApplicationMainClass(testClass);
         }

@@ -11,15 +11,16 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Utility class to get changed git files.
+ * Implementation to get latest local file changes.
  *
  * @author Lukas Dohmen
  */
-public class LocalChanges implements GitChangedFiles {
+public class LocalChangesStrategy implements GitProviderStrategy {
 
     public static final String CLASS_FILE_SUFFIX = ".java";
     public static final String PACKAGE_PREFIX = "src.main.java";
 
+    @Override
     public Set<String> getModifiedFiles() throws IOException,GitAPIException {
         try (var gitDir = new FileRepositoryBuilder().findGitDir().build()) {
             Git git = new Git(gitDir);
@@ -38,5 +39,10 @@ public class LocalChanges implements GitChangedFiles {
 
 
         }
+    }
+
+    @Override
+    public int getPriority() {
+        return 0;
     }
 }
