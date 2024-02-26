@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  *
  * @author Lukas Dohmen
  */
-public class LocalChangesStrategy implements GitProviderStrategy {
+public class UncommitedChangesStrategy implements GitProviderStrategy {
 
 
     @Override
@@ -23,19 +23,13 @@ public class LocalChangesStrategy implements GitProviderStrategy {
         try (var gitDir = new FileRepositoryBuilder().findGitDir().build()) {
             Git git = new Git(gitDir);
             Status status = git.status().call();
-
             Set<String> modified = status.getUncommittedChanges();
 
             return modified.stream().map(ClassUtils::convertResourcePathToClassName)
                     .filter(s -> s.contains(PACKAGE_PREFIX))
                     .filter(s -> s.endsWith(CLASS_FILE_SUFFIX))
-                    .map(s -> {
-                        int start = s.lastIndexOf(PACKAGE_PREFIX);
-                        return s.substring(start + PACKAGE_PREFIX.length() + 1, s.length() - CLASS_FILE_SUFFIX.length());
-                    })
+                    .map(s -> s.substring(s.lastIndexOf(PACKAGE_PREFIX) + PACKAGE_PREFIX.length() + 1, s.length() - CLASS_FILE_SUFFIX.length()))
                     .collect(Collectors.toSet());
-
-
         }
     }
 

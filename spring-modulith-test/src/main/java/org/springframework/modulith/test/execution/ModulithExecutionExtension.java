@@ -6,11 +6,12 @@ import org.junit.jupiter.api.extension.ExecutionCondition;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.test.context.AnnotatedClassFinder;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.util.ClassUtils;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -26,9 +27,15 @@ public class ModulithExecutionExtension implements ExecutionCondition {
     private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
     public static final String PROJECT_ID = ModulithExecutionExtension.class.getName();
     public static final String PROJECT_ERROR = ModulithExecutionExtension.class.getName() + ".ERROR";
+    AnnotatedClassFinder annotatedClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
+    GitProviderStrategy strategy = new UncommitedChangesStrategy();
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
+        if (context.getTestMethod().isPresent()) { // Is there something similar like @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
+            return ConditionEvaluationResult.enabled("Enabled, only evaluating per class");
+        }
+
         this.writeChangedFilesToStore(context);
 
         ExtensionContext.Store store = context.getStore(ExtensionContext.Namespace.GLOBAL);
@@ -40,7 +47,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         Set<Class<?>> modifiedFiles = (Set<Class<?>>) store.get(PROJECT_ID, Set.class);
         if (modifiedFiles.isEmpty()) {
-            //TODO: Add param to execute tests even though there are no changes
+            // What happens when there are no changes at all?
             log.trace("No files changed not running tests");
             return ConditionEvaluationResult.disabled("ModulithExecutionExtension: No changes detected");
         }
@@ -50,38 +57,40 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
 
         if (testClass.isPresent()) {
-            Class<?> mainClass = ApplicationMainClass.getInstance(testClass.get()).getMainClass();
-            ApplicationModules applicationModules = ApplicationModules.of(mainClass);
+            ApplicationModules applicationModules = getApplicationModulesFor(testClass.get());
 
             boolean isModule;
-            for (String module : Arrays.stream(ClassUtils.getPackageName(testClass.get()).split("\\.")).toList()) {
 
-                isModule = applicationModules.getModuleByName(module).isPresent();
-                if (isModule) {
+            // What happens when changes occur in shared module
+            String packageName = ClassUtils.getPackageName(testClass.get());
+            isModule = applicationModules.getModuleForPackage(packageName).isPresent();
 
-                    boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(module));
-
-                    if (!hasChanges) {
-                        return ConditionEvaluationResult.disabled(
-                                "ModulithExecutionExtension: No changes in module", module);
-                    }
+            if (isModule) {
+                boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(packageName));
+                if (hasChanges) {
+                    return ConditionEvaluationResult.enabled(
+                            "ModulithExecutionExtension: No changes in module");
                 }
             }
         }
 
-        return ConditionEvaluationResult.enabled("ModulithExtension: Changes detected in current module, executing tests");
+        return ConditionEvaluationResult.disabled("ModulithExtension: No Changes detected in current module, executing tests");
+    }
 
+    private ApplicationModules getApplicationModulesFor(Class<?> testClass) {
+        var main = annotatedClassFinder.findFromClass(testClass);
+        return ApplicationModules.of(main);
     }
 
 
     public void writeChangedFilesToStore(ExtensionContext context) {
         ExtensionContext.Store store = context.getStore(ExtensionContext.Namespace.GLOBAL);
-        // TODO seems to be computing with every test class test suite
+        // TODO computing with every test class -> A store is bound to its extension context lifecycle.
+        // Use something like ApplicationContext Caching in Spring -> ContextCache
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> set = new HashSet<>();
             try {
-                LocalChangesStrategy localChangesStrategy = new LocalChangesStrategy();
-                for (String file : localChangesStrategy.getModifiedFiles()) {
+                for (String file : strategy.getModifiedFiles()) {
                     try {
                         Class<?> aClass = ClassUtils.forName(file, null);
                         set.add(aClass);
