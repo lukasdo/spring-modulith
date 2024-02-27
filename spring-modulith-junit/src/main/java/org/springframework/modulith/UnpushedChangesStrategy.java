@@ -1,4 +1,4 @@
-package org.springframework.modulith.test.execution;
+package org.springframework.modulith;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;

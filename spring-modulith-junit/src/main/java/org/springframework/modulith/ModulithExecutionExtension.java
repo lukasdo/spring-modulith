@@ -1,4 +1,4 @@
-package org.springframework.modulith.test.execution;
+package org.springframework.modulith;
 
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
@@ -27,8 +27,9 @@ public class ModulithExecutionExtension implements ExecutionCondition {
     private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
     public static final String PROJECT_ID = ModulithExecutionExtension.class.getName();
     public static final String PROJECT_ERROR = ModulithExecutionExtension.class.getName() + ".ERROR";
-    AnnotatedClassFinder annotatedClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
-    GitProviderStrategy strategy = new UncommitedChangesStrategy();
+    final AnnotatedClassFinder annotatedClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
+    final GitProviderStrategy strategy = new UncommitedChangesStrategy();
+
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
@@ -53,17 +54,19 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         }
 
         log.trace("Found following changed files {}", modifiedFiles);
+
         Optional<Class<?>> testClass = context.getTestClass();
-
-
         if (testClass.isPresent()) {
-            ApplicationModules applicationModules = getApplicationModulesFor(testClass.get());
+            Class<?> mainClass = this.annotatedClassFinder.findFromClass(testClass.get());
 
-            boolean isModule;
+            if (mainClass == null) {
+                return ConditionEvaluationResult.enabled("ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
+            }
+            ApplicationModules applicationModules = ApplicationModules.of(mainClass);
 
             // What happens when changes occur in shared module
             String packageName = ClassUtils.getPackageName(testClass.get());
-            isModule = applicationModules.getModuleForPackage(packageName).isPresent();
+            boolean isModule = applicationModules.getModuleForPackage(packageName).isPresent();
 
             if (isModule) {
                 boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(packageName));
@@ -75,11 +78,6 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         }
 
         return ConditionEvaluationResult.disabled("ModulithExtension: No Changes detected in current module, executing tests");
-    }
-
-    private ApplicationModules getApplicationModulesFor(Class<?> testClass) {
-        var main = annotatedClassFinder.findFromClass(testClass);
-        return ApplicationModules.of(main);
     }
 
 
