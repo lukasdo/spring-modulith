@@ -15,17 +15,22 @@
  */
 package org.springframework.modulith.core;
 
+import java.lang.annotation.Annotation;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import org.jmolecules.ddd.annotation.Module;
 import org.springframework.modulith.ApplicationModule;
+import org.springframework.modulith.ApplicationModule.Type;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
+
+import com.tngtech.archunit.core.domain.JavaClass;
 
 /**
  * Abstraction for low-level module information. Used to support different annotations to configure metadata about a
@@ -43,13 +48,15 @@ interface ApplicationModuleInformation {
 	 */
 	public static ApplicationModuleInformation of(JavaPackage javaPackage) {
 
+		var lookup = AnnotationLookup.of(javaPackage, __ -> true);
+
 		if (ClassUtils.isPresent("org.jmolecules.ddd.annotation.Module",
 				ApplicationModuleInformation.class.getClassLoader())
-				&& JMoleculesModule.supports(javaPackage)) {
-			return new JMoleculesModule(javaPackage);
+				&& JMoleculesModule.supports(lookup)) {
+			return new JMoleculesModule(lookup);
 		}
 
-		return new SpringModulithModule(javaPackage);
+		return new SpringModulithModule(lookup);
 	}
 
 	/**
@@ -69,6 +76,14 @@ interface ApplicationModuleInformation {
 	List<String> getDeclaredDependencies();
 
 	/**
+	 * Returns whether the module is considered open.
+	 *
+	 * @see org.springframework.modulith.ApplicationModule.Type
+	 * @since 1.2
+	 */
+	boolean isOpen();
+
+	/**
 	 * An {@link ApplicationModuleInformation} for the jMolecules {@link Module} annotation.
 	 *
 	 * @author Oliver Drotbohm
@@ -76,14 +91,14 @@ interface ApplicationModuleInformation {
 	 */
 	static class JMoleculesModule implements ApplicationModuleInformation {
 
-		private final Optional<org.jmolecules.ddd.annotation.Module> annotation;
+		private final Optional<Module> annotation;
 
-		public static boolean supports(JavaPackage javaPackage) {
-			return javaPackage.getAnnotation(org.jmolecules.ddd.annotation.Module.class).isPresent();
+		public static boolean supports(AnnotationLookup lookup) {
+			return lookup.lookup(Module.class).isPresent();
 		}
 
-		public JMoleculesModule(JavaPackage javaPackage) {
-			this.annotation = javaPackage.getAnnotation(org.jmolecules.ddd.annotation.Module.class);
+		public <A extends Annotation> JMoleculesModule(AnnotationLookup lookup) {
+			this.annotation = lookup.lookup(Module.class);
 		}
 
 		/*
@@ -94,11 +109,11 @@ interface ApplicationModuleInformation {
 		public Optional<String> getDisplayName() {
 
 			Supplier<Optional<String>> fallback = () -> annotation //
-					.map(org.jmolecules.ddd.annotation.Module::value) //
+					.map(Module::value) //
 					.filter(StringUtils::hasText);
 
 			return annotation //
-					.map(org.jmolecules.ddd.annotation.Module::name) //
+					.map(Module::name) //
 					.filter(StringUtils::hasText)
 					.or(fallback);
 		}
@@ -110,6 +125,15 @@ interface ApplicationModuleInformation {
 		@Override
 		public List<String> getDeclaredDependencies() {
 			return List.of(ApplicationModule.OPEN_TOKEN);
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.modulith.core.ApplicationModuleInformation#isOpenModule()
+		 */
+		@Override
+		public boolean isOpen() {
+			return false;
 		}
 	}
 
@@ -123,24 +147,24 @@ interface ApplicationModuleInformation {
 		private final Optional<ApplicationModule> annotation;
 
 		/**
-		 * Whether the given {@link JavaPackage} supports this {@link ApplicationModuleInformation}.
+		 * Whether the given {@link AnnotationLookup} supports this {@link ApplicationModuleInformation}.
 		 *
-		 * @param javaPackage must not be {@literal null}.
+		 * @param lookup must not be {@literal null}.
 		 */
-		public static boolean supports(JavaPackage javaPackage) {
+		public static boolean supports(AnnotationLookup lookup) {
 
-			Assert.notNull(javaPackage, "Java package must not be null!");
+			Assert.notNull(lookup, "Annotation lookup must not be null!");
 
-			return javaPackage.getAnnotation(ApplicationModule.class).isPresent();
+			return lookup.lookup(ApplicationModule.class).isPresent();
 		}
 
 		/**
-		 * Creates a new {@link SpringModulithModule} for the given {@link JavaPackage}.
+		 * Creates a new {@link SpringModulithModule} for the given {@link AnnotationLookup}.
 		 *
-		 * @param javaPackage must not be {@literal null}.
+		 * @param lookup must not be {@literal null}.
 		 */
-		public SpringModulithModule(JavaPackage javaPackage) {
-			this.annotation = javaPackage.getAnnotation(ApplicationModule.class);
+		public SpringModulithModule(AnnotationLookup lookup) {
+			this.annotation = lookup.lookup(ApplicationModule.class);
 		}
 
 		/*
@@ -167,5 +191,31 @@ interface ApplicationModuleInformation {
 					.orElse(Stream.of(ApplicationModule.OPEN_TOKEN)) //
 					.toList();
 		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.modulith.core.ApplicationModuleInformation#isOpenModule()
+		 */
+		@Override
+		public boolean isOpen() {
+			return annotation.map(it -> it.type().equals(Type.OPEN)).orElse(false);
+		}
+	}
+
+	interface AnnotationLookup {
+
+		static AnnotationLookup of(JavaPackage javaPackage,
+				Predicate<JavaClass> typeSelector) {
+
+			return new AnnotationLookup() {
+
+				@Override
+				public <A extends Annotation> Optional<A> lookup(Class<A> annotation) {
+					return javaPackage.findAnnotation(annotation);
+				}
+			};
+		}
+
+		<A extends Annotation> Optional<A> lookup(Class<A> annotation);
 	}
 }

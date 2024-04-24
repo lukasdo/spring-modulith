@@ -16,6 +16,7 @@
 package org.springframework.modulith.core;
 
 import static com.tngtech.archunit.base.DescribedPredicate.*;
+import static org.springframework.modulith.core.SyntacticSugar.*;
 import static org.springframework.modulith.core.Types.*;
 
 import java.util.Iterator;
@@ -44,6 +45,8 @@ public class NamedInterface implements Iterable<JavaClass> {
 	static final String UNNAMED_NAME = "<<UNNAMED>>";
 	private static final DescribedPredicate<CanBeAnnotated> ANNOTATED_NAMED_INTERFACE = //
 			isAnnotatedWith(org.springframework.modulith.NamedInterface.class);
+	private static final DescribedPredicate<JavaClass> ANNOTATED_NAMED_INTERFACE_PACKAGE = //
+			residesInPackageAnnotatedWith(org.springframework.modulith.NamedInterface.class);
 
 	private final String name;
 	private final Classes classes;
@@ -69,7 +72,7 @@ public class NamedInterface implements Iterable<JavaClass> {
 	 */
 	static List<NamedInterface> of(JavaPackage javaPackage) {
 
-		var names = javaPackage.getAnnotation(org.springframework.modulith.NamedInterface.class) //
+		var names = javaPackage.findAnnotation(org.springframework.modulith.NamedInterface.class) //
 				.map(it -> getDefaultedNames(it, javaPackage.getName())) //
 				.orElseThrow(() -> new IllegalArgumentException(
 						String.format("Couldn't find NamedInterface annotation on package %s!", javaPackage)));
@@ -98,22 +101,26 @@ public class NamedInterface implements Iterable<JavaClass> {
 	 * @param javaPackage must not be {@literal null}.
 	 * @return will never be {@literal null}.
 	 */
-	static NamedInterface unnamed(JavaPackage javaPackage) {
+	static NamedInterface unnamed(JavaPackage javaPackage, boolean flatten) {
 
-		var basePackageClasses = javaPackage.toSingle().getExposedClasses();
+		var basePackageClasses = (flatten ? javaPackage.toSingle() : javaPackage).getExposedClasses();
 
-		// Types that declare the annotation but no explicit name
-		var withDefaultedNamedInterface = basePackageClasses.stream()
-				.filter(ANNOTATED_NAMED_INTERFACE)
-				.filter(NamedInterface::withDefaultedNamedInterface)
-				.toList();
+		if (flatten) {
 
-		// Illegal in the base package
-		Assert.state(withDefaultedNamedInterface.isEmpty(),
-				() -> "Cannot use named interface defaulting for type(s) %s located in base package!"
-						.formatted(FormatableType.format(withDefaultedNamedInterface)));
+			// Types that declare the annotation but no explicit name
+			var withDefaultedNamedInterface = basePackageClasses.stream()
+					.filter(ANNOTATED_NAMED_INTERFACE)
+					.filter(NamedInterface::withDefaultedNamedInterface)
+					.toList();
 
-		return new NamedInterface(UNNAMED_NAME, basePackageClasses.that(not(ANNOTATED_NAMED_INTERFACE)));
+			// Illegal in the base package
+			Assert.state(withDefaultedNamedInterface.isEmpty(),
+					() -> "Cannot use named interface defaulting for type(s) %s located in base package!"
+							.formatted(FormatableType.format(withDefaultedNamedInterface)));
+		}
+
+		return new NamedInterface(UNNAMED_NAME, basePackageClasses
+				.that(not(ANNOTATED_NAMED_INTERFACE_PACKAGE).and(not(ANNOTATED_NAMED_INTERFACE))));
 	}
 
 	/**

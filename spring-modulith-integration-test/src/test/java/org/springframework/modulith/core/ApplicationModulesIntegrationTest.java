@@ -21,6 +21,7 @@ import example.declared.first.First;
 import example.declared.fourth.Fourth;
 import example.declared.second.Second;
 import example.declared.third.Third;
+import example.empty.EmptyApplication;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -209,6 +210,36 @@ class ApplicationModulesIntegrationTest {
 			assertThat(it.getBootstrapDependencies(modules).map(ApplicationModule::getName))
 					.containsExactly("moduleA");
 		});
+	}
+
+	@Test // GH-284
+	void detectsOpenModule() {
+
+		assertThat(modules.getModuleByName("open")).hasValueSatisfying(it -> {
+			assertThat(it.isOpen()).isTrue();
+		});
+
+		var detectViolations = modules.detectViolations().getMessages();
+
+		assertThat(detectViolations)
+				.isNotEmpty()
+
+				// No invalid references to internals from unrestricted module
+				.noneMatch(it -> it.matches("Module 'openclient' depends on non-exposed type .* within module 'open'"))
+
+				// Invalid reference to internals from restricted module
+				.anyMatch(it -> it.contains("Module 'opendisallowedclient' depends on module 'open'"))
+
+				// No cycle detection
+				.anyMatch(it -> it.contains("Cycle detected: Slice cycleA"))
+				.noneMatch(it -> it.contains("Cycle detected: Slice open"));
+	}
+
+	@Test // GH-520
+	void bootstrapsOnEmptyProject() {
+
+		assertThatNoException().isThrownBy(() -> ApplicationModules.of(EmptyApplication.class).verify());
+		assertThatIllegalArgumentException().isThrownBy(() -> ApplicationModules.of("non.existant"));
 	}
 
 	private static void verifyNamedInterfaces(NamedInterfaces interfaces, String name, Class<?>... types) {

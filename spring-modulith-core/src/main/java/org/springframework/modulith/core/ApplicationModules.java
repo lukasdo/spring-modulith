@@ -24,6 +24,7 @@ import static java.util.stream.Collectors.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -114,6 +115,8 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 				.importPackages(packages) //
 				.that(not(ignored.or(IS_AOT_TYPE).or(IS_SPRING_CGLIB_PROXY)));
 
+		Assert.notEmpty(allClasses, () -> "No classes found in packages %s!".formatted(packages));
+
 		Classes classes = Classes.of(allClasses);
 
 		this.modules = packages.stream() //
@@ -151,13 +154,13 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 * @param orderedNames must not be {@literal null}.
 	 * @param verified
 	 */
-	private ApplicationModules(ModulithMetadata metadata, Map<String, ApplicationModule> modules, JavaClasses classes,
+	private ApplicationModules(ModulithMetadata metadata, Map<String, ApplicationModule> modules, JavaClasses allClasses,
 			List<JavaPackage> rootPackages, Supplier<List<ApplicationModule>> rootModules,
 			Set<ApplicationModule> sharedModules, List<String> orderedNames, boolean verified) {
 
 		Assert.notNull(metadata, "ModulithMetadata must not be null!");
 		Assert.notNull(modules, "Application modules must not be null!");
-		Assert.notNull(classes, "JavaClasses must not be null!");
+		Assert.notNull(allClasses, "JavaClasses must not be null!");
 		Assert.notNull(rootPackages, "Root JavaPackages must not be null!");
 		Assert.notNull(rootModules, "Root modules must not be null!");
 		Assert.notNull(sharedModules, "Shared ApplicationModules must not be null!");
@@ -165,7 +168,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 
 		this.metadata = metadata;
 		this.modules = modules;
-		this.allClasses = classes;
+		this.allClasses = allClasses;
 		this.rootPackages = rootPackages;
 		this.rootModules = rootModules;
 		this.sharedModules = sharedModules;
@@ -810,6 +813,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		public SliceIdentifier getIdentifierOf(JavaClass javaClass) {
 
 			return getModuleByType(javaClass)
+					.filter(Predicate.not(ApplicationModule::isOpen))
 					.map(ApplicationModule::getName)
 					.map(SliceIdentifier::of)
 					.orElse(SliceIdentifier.ignore());
