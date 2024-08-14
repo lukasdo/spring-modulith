@@ -1,13 +1,5 @@
 package org.springframework.modulith;
 
-import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
-
-import java.io.IOException;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.ServiceLoader;
-import java.util.ServiceLoader.Provider;
-import java.util.Set;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
@@ -20,6 +12,15 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.util.ClassUtils;
 
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.ServiceLoader;
+import java.util.ServiceLoader.Provider;
+import java.util.Set;
+
+import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
+
 
 /**
  * Junit Extension to skip test execution if no changes happened in the module that the test belongs to.
@@ -29,16 +30,13 @@ import org.springframework.util.ClassUtils;
 public class ModulithExecutionExtension implements ExecutionCondition {
     public static final String CONFIG_PROPERTY_PREFIX = "spring.modulith.test";
     public static final String PROJECT_ERROR = ModulithExecutionExtension.class.getName() + ".ERROR";
+    final AnnotatedClassFinder spaClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
     public static final String PROJECT_ID = ModulithExecutionExtension.class.getName();
-
     private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
-    final AnnotatedClassFinder annotatedClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
-
-        if (context.getTestMethod()
-            .isPresent()) { // Is there something similar like @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
+        if (context.getTestMethod().isPresent()) { // Is there something similar like @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
             return ConditionEvaluationResult.enabled("Enabled, only evaluating per class");
         }
 
@@ -65,9 +63,9 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         Optional<Class<?>> testClass = context.getTestClass();
         if (testClass.isPresent()) {
-            Class<?> mainClass = this.annotatedClassFinder.findFromClass(testClass.get());
+            Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
-            if (mainClass == null) {
+            if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
                 return ConditionEvaluationResult.enabled(
                     "ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
             }
@@ -77,27 +75,22 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             String packageName = ClassUtils.getPackageName(testClass.get());
             boolean isModule = applicationModules.getModuleForPackage(packageName).isPresent();
 
-            if (isModule) {
-                boolean hasChanges = modifiedFiles.stream()
-                    .map(Class::getPackageName)
-                    .anyMatch(s -> s.equals(packageName));
+            if (isModule) {// equals or prefix with a .
+                boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(packageName));
                 if (hasChanges) {
                     return ConditionEvaluationResult.enabled("ModulithExecutionExtension: No changes in module");
                 }
             }
         }
 
-        return ConditionEvaluationResult.disabled(
-            "ModulithExtension: No Changes detected in current module, executing tests");
+        return ConditionEvaluationResult.disabled("ModulithExtension: No Changes detected in current module, executing tests");
     }
 
 
     public void writeChangedFilesToStore(ExtensionContext context, ApplicationContext applicationContext) {
         var strategy = loadGitProviderStrategy(applicationContext);
 
-        ExtensionContext.Store store = context.getStore(ExtensionContext.Namespace.GLOBAL);
-        // TODO computing with every test class -> A store is bound to its extension context lifecycle.
-        // Use something like ApplicationContext Caching in Spring -> ContextCache
+        ExtensionContext.Store store = context.getRoot().getStore(ExtensionContext.Namespace.GLOBAL);
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> set = new HashSet<>();
             try {

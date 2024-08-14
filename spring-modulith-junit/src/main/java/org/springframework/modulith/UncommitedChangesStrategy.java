@@ -24,7 +24,7 @@ public class UncommitedChangesStrategy implements GitProviderStrategy {
             Git git = new Git(gitDir);
             Status status = git.status().call();
             Set<String> modified = status.getUncommittedChanges();
-
+			//TODO:: Add untracked
             return modified.stream().map(ClassUtils::convertResourcePathToClassName)
                     .filter(s -> s.contains(PACKAGE_PREFIX))
                     .filter(s -> s.endsWith(CLASS_FILE_SUFFIX))
