@@ -10,6 +10,6 @@ public interface GitProviderStrategy {
 	String CLASS_FILE_SUFFIX = ".java";
 	String PACKAGE_PREFIX = "src.main.java";
 
-	Set<String> getModifiedFiles(PropertyResolver propertyResolver) throws IOException, GitAPIException;
+	Set<FileChange> getModifiedFiles(PropertyResolver propertyResolver) throws IOException, GitAPIException;
 
 }

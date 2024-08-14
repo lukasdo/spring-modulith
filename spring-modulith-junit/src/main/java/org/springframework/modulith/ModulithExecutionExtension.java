@@ -1,5 +1,7 @@
 package org.springframework.modulith;
 
+import java.util.stream.Collectors;
+
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
@@ -19,6 +21,8 @@ import java.util.ServiceLoader;
 import java.util.ServiceLoader.Provider;
 import java.util.Set;
 
+import static org.springframework.modulith.GitProviderStrategy.CLASS_FILE_SUFFIX;
+import static org.springframework.modulith.GitProviderStrategy.PACKAGE_PREFIX;
 import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
 
 
@@ -92,21 +96,33 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         ExtensionContext.Store store = context.getRoot().getStore(ExtensionContext.Namespace.GLOBAL);
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
-            Set<Class<?>> set = new HashSet<>();
+            Set<Class<?>> changedClasses = new HashSet<>();
             try {
-                for (String file : strategy.getModifiedFiles(applicationContext.getEnvironment())) {
+                Set<FileChange> modifiedFiles = strategy.getModifiedFiles(applicationContext.getEnvironment());
+
+                Set<String> changedClassNames = modifiedFiles.stream()
+                        // Consider old path of file as well?
+                        .map(FileChange::path)
+                        .map(ClassUtils::convertResourcePathToClassName)
+                        .filter(path -> path.contains(PACKAGE_PREFIX)) // DELETED will be filtered as new path will be /dev/null
+                        .filter(path -> path.endsWith(CLASS_FILE_SUFFIX))
+                        .map(path -> path.substring(path.lastIndexOf(PACKAGE_PREFIX) + PACKAGE_PREFIX.length() + 1,
+                                path.length() - CLASS_FILE_SUFFIX.length()))
+                        .collect(Collectors.toSet());
+
+                for (String className : changedClassNames) {
                     try {
-                        Class<?> aClass = ClassUtils.forName(file, null);
-                        set.add(aClass);
+                        Class<?> aClass = ClassUtils.forName(className, null);
+                        changedClasses.add(aClass);
                     } catch (ClassNotFoundException e) {
-                        log.trace("ModulithExecutionExtension: Unable to find class for file {}", file);
+                        log.trace("ModulithExecutionExtension: Unable to find class \"{}\"", className);
                     }
                 }
-                return set;
+                return changedClasses;
             } catch (IOException | GitAPIException e) {
                 log.error("ModulithExecutionExtension: Unable to fetch changed files, executing all tests", e);
                 store.put(PROJECT_ERROR, e);
-                return set;
+                return changedClasses;
             }
         });
     }
