@@ -1,16 +1,15 @@
 package org.springframework.modulith;
 
-import org.eclipse.jgit.api.errors.GitAPIException;
-
 import java.io.IOException;
 import java.util.Set;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.springframework.core.env.PropertyResolver;
 
 public interface GitProviderStrategy {
 
-    String CLASS_FILE_SUFFIX = ".java";
-    String PACKAGE_PREFIX = "src.main.java";
+	String CLASS_FILE_SUFFIX = ".java";
+	String PACKAGE_PREFIX = "src.main.java";
 
-    Set<String> getModifiedFiles() throws IOException, GitAPIException;
+	Set<String> getModifiedFiles(PropertyResolver propertyResolver) throws IOException, GitAPIException;
 
-    int getPriority();
 }

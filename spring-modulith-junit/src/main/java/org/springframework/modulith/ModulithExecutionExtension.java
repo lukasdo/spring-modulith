@@ -94,7 +94,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> set = new HashSet<>();
             try {
-                for (String file : strategy.getModifiedFiles()) {
+                for (String file : strategy.getModifiedFiles(applicationContext.getEnvironment())) {
                     try {
                         Class<?> aClass = ClassUtils.forName(file, null);
                         set.add(aClass);
