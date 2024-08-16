@@ -15,7 +15,7 @@ import org.springframework.core.env.PropertyResolver;
  *
  * @author Lukas Dohmen
  */
-public class UncommitedChangesStrategy implements GitProviderStrategy {
+public class UncommittedChangesStrategy implements GitProviderStrategy {
 
 
 	@Override

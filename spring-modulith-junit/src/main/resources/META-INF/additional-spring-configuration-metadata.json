@@ -9,7 +9,7 @@
     {
       "name": "spring.modulith.test.changed-files-strategy",
       "type": "java.lang.String",
-      "defaultValue": "org.springframework.modulith.UncommitedChangesStrategy",
+      "defaultValue": "org.springframework.modulith.UncommittedChangesStrategy",
       "description": "A strategy to determine the list of changed files to consider for test execution. This should be a fully qualified class name of a registered implementation."
     }
   ],

@@ -34,8 +34,8 @@ import static org.springframework.test.context.junit.jupiter.SpringExtension.get
 public class ModulithExecutionExtension implements ExecutionCondition {
     public static final String CONFIG_PROPERTY_PREFIX = "spring.modulith.test";
     public static final String PROJECT_ERROR = ModulithExecutionExtension.class.getName() + ".ERROR";
-    final AnnotatedClassFinder spaClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
     public static final String PROJECT_ID = ModulithExecutionExtension.class.getName();
+    final AnnotatedClassFinder spaClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
     private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
 
     @Override
@@ -58,7 +58,6 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         Set<Class<?>> modifiedFiles = (Set<Class<?>>) store.get(PROJECT_ID, Set.class);
         if (modifiedFiles.isEmpty()) {
-            // What happens when there are no changes at all?
             log.trace("No files changed not running tests");
             return ConditionEvaluationResult.disabled("ModulithExecutionExtension: No changes detected");
         }
@@ -75,7 +74,6 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             }
             ApplicationModules applicationModules = ApplicationModules.of(mainClass);
 
-            // What happens when changes occur in shared module
             String packageName = ClassUtils.getPackageName(testClass.get());
             boolean isModule = applicationModules.getModuleForPackage(packageName).isPresent();
 
@@ -101,7 +99,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
                 Set<FileChange> modifiedFiles = strategy.getModifiedFiles(applicationContext.getEnvironment());
 
                 Set<String> changedClassNames = modifiedFiles.stream()
-                        // Consider old path of file as well?
+
                         .map(FileChange::path)
                         .map(ClassUtils::convertResourcePathToClassName)
                         .filter(path -> path.contains(PACKAGE_PREFIX)) // DELETED will be filtered as new path will be /dev/null
@@ -136,7 +134,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             .filter(strategyProvider -> strategyProvider.type().getName().equals(property))
             .findFirst()
             .map(Provider::get)
-            .orElseGet(UncommitedChangesStrategy::new);
+            .orElseGet(UncommittedChangesStrategy::new);
 
         log.info("Strategy for finding changed files is '{}'", strategy.getClass().getName());
 
