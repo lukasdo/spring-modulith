@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -34,10 +35,13 @@ import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.modulith.core.JavaPackage;
 import org.springframework.modulith.test.ApplicationModuleTest.BootstrapMode;
+import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.util.function.SingletonSupplier;
 
 /**
  * @author Oliver Drotbohm
+ * @author Lukas Dohmen
  */
 public class ModuleTestExecution implements Iterable<ApplicationModule> {
 
@@ -94,12 +98,14 @@ public class ModuleTestExecution implements Iterable<ApplicationModule> {
 
 			var annotation = AnnotatedElementUtils.findMergedAnnotation(type, ApplicationModuleTest.class);
 			var packageName = type.getPackage().getName();
+			var modules = ApplicationModules.of(findSpringBootApplicationByClasses(annotation, type));
+			var moduleName = annotation.module();
 
-			var modulithType = MODULITH_TYPES.computeIfAbsent(type,
-					it -> new AnnotatedClassFinder(SpringBootApplication.class).findFromPackage(packageName));
-			var modules = ApplicationModules.of(modulithType);
-			var module = modules.getModuleForPackage(packageName).orElseThrow( //
-					() -> new IllegalStateException(String.format("Package %s is not part of any module!", packageName)));
+			var module = StringUtils.hasText(moduleName)
+					? modules.getModuleByName(moduleName).orElseThrow( //
+							() -> new IllegalStateException(String.format("Unable to find module %s!", moduleName)))
+					: modules.getModuleForPackage(packageName).orElseThrow( //
+							() -> new IllegalStateException(String.format("Package %s is not part of any module!", packageName)));
 
 			return EXECUTIONS.computeIfAbsent(new Key(module.getBasePackage().getName(), annotation),
 					it -> new ModuleTestExecution(annotation, modules, module));
@@ -228,6 +234,24 @@ public class ModuleTestExecution implements Iterable<ApplicationModule> {
 		return Arrays.stream(annotation.extraIncludes()) //
 				.map(modules::getModuleByName) //
 				.flatMap(Optional::stream);
+	}
+
+	private static Class<?> findSpringBootApplicationByClasses(ApplicationModuleTest annotation,
+			Class<?> testClass) {
+
+		var types = ObjectUtils.addObjectToArray(annotation.classes(), testClass);
+
+		return Arrays.stream(types)
+				.<Class<?>> map(ModuleTestExecution::lookupSpringBootApplicationAnnotation)
+				.findFirst()
+				.orElseThrow(() -> new IllegalStateException("Couldn't find @SpringBootApplication traversing %s."
+						.formatted(Arrays.stream(types).map(Class::getName).collect(Collectors.joining(", ")))));
+	}
+
+	private static Class<?> lookupSpringBootApplicationAnnotation(Class<?> clazz) {
+
+		return MODULITH_TYPES.computeIfAbsent(clazz,
+				it -> new AnnotatedClassFinder(SpringBootApplication.class).findFromClass(clazz));
 	}
 
 	private static record Key(String moduleBasePackage, ApplicationModuleTest annotation) {}

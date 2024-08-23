@@ -13,14 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package example.empty;
+package org.springframework.modulith.test;
 
-import org.springframework.modulith.Modulithic;
+import static org.assertj.core.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
 
 /**
+ * Unit tests for {@link ModuleTypeExcludeFilter}.
+ *
  * @author Oliver Drotbohm
  */
-@Modulithic
-public class EmptyApplication {
+class ModuleTypeExcludeFilterUnitTests {
 
+	@Test
+	void instancesForSameTargetTypeAreEqual() {
+
+		var left = new ModuleTypeExcludeFilter(Object.class);
+		var right = new ModuleTypeExcludeFilter(Object.class);
+
+		assertThat(left).isEqualTo(right);
+		assertThat(right).isEqualTo(left);
+		assertThat(left).hasSameHashCodeAs(right);
+	}
 }

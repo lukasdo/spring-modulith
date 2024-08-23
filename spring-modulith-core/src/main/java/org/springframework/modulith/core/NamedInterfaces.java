@@ -65,7 +65,7 @@ public class NamedInterfaces implements Iterable<NamedInterface> {
 
 		return NamedInterfaces.of(NamedInterface.unnamed(basePackage, true))
 				.and(ofAnnotatedPackages(basePackage))
-				.and(ofAnnotatedTypes(basePackage));
+				.and(ofAnnotatedTypes(basePackage.getClasses()));
 	}
 
 	/**
@@ -106,7 +106,7 @@ public class NamedInterfaces implements Iterable<NamedInterface> {
 
 		return NamedInterfaces.of(NamedInterface.unnamed(basePackage, false))
 				.and(ofAnnotatedPackages(basePackage))
-				.and(ofAnnotatedTypes(basePackage));
+				.and(ofAnnotatedTypes(basePackage.getClasses()));
 	}
 
 	/**
@@ -151,6 +151,34 @@ public class NamedInterfaces implements Iterable<NamedInterface> {
 				.filter(NamedInterface::isUnnamed) //
 				.findFirst() //
 				.orElseThrow(() -> new IllegalStateException("No unnamed interface found!"));
+	}
+
+	/**
+	 * Returns all named interfaces that contain the given type.
+	 *
+	 * @param type must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 */
+	public Stream<NamedInterface> getNamedInterfacesContaining(JavaClass type) {
+
+		Assert.notNull(type, "Type must not be null!");
+
+		return namedInterfaces.stream()
+				.filter(it -> it.contains(type));
+	}
+
+	/**
+	 * Returns whether the given type is contained in one of the explicitly named {@link NamedInterface}s.
+	 *
+	 * @param type must not be {@literal null}.
+	 * @since 1.2
+	 */
+	public boolean containsInExplicitInterface(JavaClass type) {
+
+		Assert.notNull(type, "Type must not be null!");
+
+		return getNamedInterfacesContaining(type)
+				.anyMatch(NamedInterface::isNamed);
 	}
 
 	/*
@@ -198,15 +226,27 @@ public class NamedInterfaces implements Iterable<NamedInterface> {
 		return new NamedInterfaces(namedInterfaces);
 	}
 
+	Stream<NamedInterface> getNamedInterfacesContaining(Class<?> type) {
+
+		return namedInterfaces.stream()
+				.filter(it -> it.contains(type));
+	}
+
+	boolean containsInExplicitInterface(Class<?> type) {
+
+		return getNamedInterfacesContaining(type)
+				.anyMatch(NamedInterface::isNamed);
+	}
+
 	private static NamedInterfaces of(NamedInterface interfaces) {
 		return new NamedInterfaces(List.of(interfaces));
 	}
 
-	private static List<NamedInterface> ofAnnotatedTypes(JavaPackage basePackage) {
+	private static List<NamedInterface> ofAnnotatedTypes(Classes classes) {
 
 		var mappings = new LinkedMultiValueMap<String, JavaClass>();
 
-		basePackage.stream() //
+		classes.stream() //
 				.filter(it -> !JavaPackage.isPackageInfoType(it)) //
 				.forEach(it -> {
 

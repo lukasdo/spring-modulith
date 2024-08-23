@@ -15,7 +15,15 @@
  */
 package org.springframework.modulith.events.jdbc;
 
+import java.sql.Connection;
+
+import javax.sql.DataSource;
+
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.core.io.ResourceLoader;
+import org.springframework.jdbc.core.JdbcOperations;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.util.Assert;
 
 /**
  * Initializes the DB schema used to store events
@@ -23,5 +31,73 @@ import org.springframework.beans.factory.InitializingBean;
  * @author Dmitry Belyaev
  * @author Björn Kieling
  * @author Oliver Drotbohm
+ * @author Raed Ben Hamouda
  */
-interface DatabaseSchemaInitializer extends InitializingBean {}
+class DatabaseSchemaInitializer implements InitializingBean {
+
+	private final DataSource dataSource;
+	private final ResourceLoader resourceLoader;
+	private final DatabaseType databaseType;
+	private final JdbcOperations jdbcOperations;
+	private final JdbcConfigurationProperties properties;
+
+	DatabaseSchemaInitializer(DataSource dataSource, ResourceLoader resourceLoader, DatabaseType databaseType,
+			JdbcOperations jdbcOperations, JdbcConfigurationProperties properties) {
+
+		Assert.isTrue(properties.getSchemaInitialization().isEnabled(),
+				"Schema initialization disabled! Initializer should not have been registered!");
+
+		this.dataSource = dataSource;
+		this.resourceLoader = resourceLoader;
+		this.databaseType = databaseType;
+		this.jdbcOperations = jdbcOperations;
+		this.properties = properties;
+
+		properties.verify(databaseType);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.beans.factory.InitializingBean#afterPropertiesSet()
+	 */
+	@Override
+	public void afterPropertiesSet() throws Exception {
+
+		try (Connection connection = dataSource.getConnection()) {
+
+			var initialSchema = connection.getSchema();
+			var schemaName = properties.getSchema();
+
+			if (schemaName != null && !schemaName.isEmpty()) { // A schema name has been specified.
+
+				if (eventPublicationTableExists(schemaName)) {
+					return;
+				}
+
+				jdbcOperations.execute("CREATE SCHEMA IF NOT EXISTS " + schemaName);
+				jdbcOperations.execute(databaseType.getSetSchemaSql(schemaName));
+			}
+
+			var locator = new DatabaseSchemaLocator(resourceLoader);
+			new ResourceDatabasePopulator(locator.getSchemaResource(databaseType)).execute(dataSource);
+
+			// Return to the initial schema.
+			if (initialSchema != null) {
+				jdbcOperations.execute(databaseType.getSetSchemaSql(initialSchema));
+			}
+		}
+	}
+
+	private boolean eventPublicationTableExists(String schema) {
+
+		var query = """
+				SELECT COUNT(*)
+				FROM information_schema.tables
+				WHERE table_schema = ? AND table_name = 'EVENT_PUBLICATION'
+				""";
+
+		var count = jdbcOperations.queryForObject(query, Integer.class, schema);
+
+		return count != null && count > 0;
+	}
+}

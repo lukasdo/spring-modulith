@@ -24,6 +24,7 @@ import org.springframework.util.Assert;
  * @author Dmitry Belyaev
  * @author Björn Kieling
  * @author Oliver Drotbohm
+ * @author Raed Ben Hamouda
  */
 enum DatabaseType {
 
@@ -45,6 +46,8 @@ enum DatabaseType {
 	},
 
 	POSTGRES("postgresql", "PostgreSQL");
+
+	static final String SCHEMA_NOT_SUPPORTED = "Setting the schema name not supported on MySQL!";
 
 	static DatabaseType from(String productName) {
 
@@ -74,5 +77,15 @@ enum DatabaseType {
 
 	String getSchemaResourceFilename() {
 		return "/schema-" + value + ".sql";
+	}
+
+	String getSetSchemaSql(String schema) {
+
+		return switch (this) {
+
+			case MYSQL -> throw new IllegalArgumentException(SCHEMA_NOT_SUPPORTED);
+			case H2, HSQLDB -> "SET SCHEMA " + schema;
+			case POSTGRES -> "SET search_path TO " + schema;
+		};
 	}
 }

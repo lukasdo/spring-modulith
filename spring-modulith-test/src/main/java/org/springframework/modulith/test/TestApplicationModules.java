@@ -15,13 +15,9 @@
  */
 package org.springframework.modulith.test;
 
-import java.util.List;
-
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.modulith.core.ApplicationModulesFactory;
-import org.springframework.modulith.core.ModulithMetadata;
 
-import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.importer.ImportOption;
 
 /**
@@ -31,6 +27,8 @@ import com.tngtech.archunit.core.importer.ImportOption;
  */
 public class TestApplicationModules {
 
+	private static ImportOption ONLY_TESTS = new ImportOption.OnlyIncludeTests();
+
 	/**
 	 * Creates an {@link ApplicationModules} instance from the given package but only inspecting the test code.
 	 *
@@ -38,7 +36,7 @@ public class TestApplicationModules {
 	 * @return will never be {@literal null}.
 	 */
 	public static ApplicationModules of(String basePackage) {
-		return of(ModulithMetadata.of(basePackage), basePackage);
+		return ApplicationModules.of(basePackage, ONLY_TESTS);
 	}
 
 	/**
@@ -49,12 +47,7 @@ public class TestApplicationModules {
 	 * @since 1.2
 	 */
 	public static ApplicationModules of(Class<?> applicationClass) {
-		return of(ModulithMetadata.of(applicationClass), applicationClass.getPackageName());
-	}
-
-	private static ApplicationModules of(ModulithMetadata metadata, String basePackage) {
-		return new ApplicationModules(metadata, List.of(basePackage), DescribedPredicate.alwaysFalse(), false,
-				new ImportOption.OnlyIncludeTests()) {};
+		return ApplicationModules.of(applicationClass, ONLY_TESTS);
 	}
 
 	/**

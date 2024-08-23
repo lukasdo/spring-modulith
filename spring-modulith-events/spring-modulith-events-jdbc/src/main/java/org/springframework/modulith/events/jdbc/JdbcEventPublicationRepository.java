@@ -25,10 +25,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.BeanClassLoaderAware;
 import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.lang.Nullable;
 import org.springframework.modulith.events.core.EventPublicationRepository;
@@ -37,6 +40,8 @@ import org.springframework.modulith.events.core.PublicationTargetIdentifier;
 import org.springframework.modulith.events.core.TargetEventPublication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.Assert;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.ObjectUtils;
 
 /**
  * JDBC-based repository to store {@link TargetEventPublication}s.
@@ -44,33 +49,34 @@ import org.springframework.util.Assert;
  * @author Dmitry Belyaev
  * @author Björn Kieling
  * @author Oliver Drotbohm
+ * @author Raed Ben Hamouda
  */
-class JdbcEventPublicationRepository implements EventPublicationRepository {
+class JdbcEventPublicationRepository implements EventPublicationRepository, BeanClassLoaderAware {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(JdbcEventPublicationRepository.class);
 
 	private static final String SQL_STATEMENT_INSERT = """
-			INSERT INTO EVENT_PUBLICATION (ID, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT)
+			INSERT INTO %s (ID, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT)
 			VALUES (?, ?, ?, ?, ?)
 			""";
 
 	private static final String SQL_STATEMENT_FIND_COMPLETED = """
 			SELECT ID, COMPLETION_DATE, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE COMPLETION_DATE IS NOT NULL
 			ORDER BY PUBLICATION_DATE ASC
 			""";
 
 	private static final String SQL_STATEMENT_FIND_UNCOMPLETED = """
 			SELECT ID, COMPLETION_DATE, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE COMPLETION_DATE IS NULL
 			ORDER BY PUBLICATION_DATE ASC
 			""";
 
 	private static final String SQL_STATEMENT_FIND_UNCOMPLETED_BEFORE = """
 			SELECT ID, COMPLETION_DATE, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE
 					COMPLETION_DATE IS NULL
 					AND PUBLICATION_DATE < ?
@@ -78,16 +84,24 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 			""";
 
 	private static final String SQL_STATEMENT_UPDATE_BY_EVENT_AND_LISTENER_ID = """
-			UPDATE EVENT_PUBLICATION
+			UPDATE %s
 			SET COMPLETION_DATE = ?
 			WHERE
 					LISTENER_ID = ?
+					AND COMPLETION_DATE IS NULL
 					AND SERIALIZED_EVENT = ?
+			""";
+
+	private static final String SQL_STATEMENT_UPDATE_BY_ID = """
+			UPDATE %s
+			SET COMPLETION_DATE = ?
+			WHERE
+					ID = ?
 			""";
 
 	private static final String SQL_STATEMENT_FIND_BY_EVENT_AND_LISTENER_ID = """
 			SELECT *
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE
 					SERIALIZED_EVENT = ?
 					AND LISTENER_ID = ?
@@ -97,21 +111,21 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 
 	private static final String SQL_STATEMENT_DELETE = """
 			DELETE
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE
-					ID IN (?)
+					ID IN
 			""";
 
 	private static final String SQL_STATEMENT_DELETE_UNCOMPLETED = """
 			DELETE
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE
 					COMPLETION_DATE IS NOT NULL
 			""";
 
 	private static final String SQL_STATEMENT_DELETE_UNCOMPLETED_BEFORE = """
 			DELETE
-			FROM EVENT_PUBLICATION
+			FROM %s
 			WHERE
 					COMPLETION_DATE < ?
 			""";
@@ -121,25 +135,62 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	private final JdbcOperations operations;
 	private final EventSerializer serializer;
 	private final DatabaseType databaseType;
+	private ClassLoader classLoader;
+
+	private final String sqlStatementInsert,
+			sqlStatementFindCompleted,
+			sqlStatementFindUncompleted,
+			sqlStatementFindUncompletedBefore,
+			sqlStatementUpdateByEventAndListenerId,
+			sqlStatementUpdateById,
+			sqlStatementFindByEventAndListenerId,
+			sqlStatementDelete,
+			sqlStatementDeleteUncompleted,
+			sqlStatementDeleteUncompletedBefore;
 
 	/**
-	 * Creates a new {@link JdbcEventPublicationRepository} for the given {@link JdbcOperations}, {@link EventSerializer}
-	 * and {@link DatabaseType}.
+	 * Creates a new {@link JdbcEventPublicationRepository} for the given {@link JdbcOperations}, {@link EventSerializer},
+	 * {@link DatabaseType} and {@link JdbcConfigurationProperties}.
 	 *
 	 * @param operations must not be {@literal null}.
 	 * @param serializer must not be {@literal null}.
 	 * @param databaseType must not be {@literal null}.
+	 * @param properties must not be {@literal null}.
 	 */
 	public JdbcEventPublicationRepository(JdbcOperations operations, EventSerializer serializer,
-			DatabaseType databaseType) {
+			DatabaseType databaseType, JdbcConfigurationProperties properties) {
 
 		Assert.notNull(operations, "JdbcOperations must not be null!");
 		Assert.notNull(serializer, "EventSerializer must not be null!");
 		Assert.notNull(databaseType, "DatabaseType must not be null!");
+		Assert.notNull(properties, "JdbcConfigurationProperties must not be null!");
 
 		this.operations = operations;
 		this.serializer = serializer;
 		this.databaseType = databaseType;
+
+		var schema = properties.getSchema();
+		var table = ObjectUtils.isEmpty(schema) ? "EVENT_PUBLICATION" : schema + ".EVENT_PUBLICATION";
+
+		this.sqlStatementInsert = SQL_STATEMENT_INSERT.formatted(table);
+		this.sqlStatementFindCompleted = SQL_STATEMENT_FIND_COMPLETED.formatted(table);
+		this.sqlStatementFindUncompleted = SQL_STATEMENT_FIND_UNCOMPLETED.formatted(table);
+		this.sqlStatementFindUncompletedBefore = SQL_STATEMENT_FIND_UNCOMPLETED_BEFORE.formatted(table);
+		this.sqlStatementUpdateByEventAndListenerId = SQL_STATEMENT_UPDATE_BY_EVENT_AND_LISTENER_ID.formatted(table);
+		this.sqlStatementUpdateById = SQL_STATEMENT_UPDATE_BY_ID.formatted(table);
+		this.sqlStatementFindByEventAndListenerId = SQL_STATEMENT_FIND_BY_EVENT_AND_LISTENER_ID.formatted(table);
+		this.sqlStatementDelete = SQL_STATEMENT_DELETE.formatted(table);
+		this.sqlStatementDeleteUncompleted = SQL_STATEMENT_DELETE_UNCOMPLETED.formatted(table);
+		this.sqlStatementDeleteUncompletedBefore = SQL_STATEMENT_DELETE_UNCOMPLETED_BEFORE.formatted(table);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.beans.factory.BeanClassLoaderAware#setBeanClassLoader(java.lang.ClassLoader)
+	 */
+	@Override
+	public void setBeanClassLoader(ClassLoader classLoader) {
+		this.classLoader = classLoader;
 	}
 
 	/*
@@ -153,7 +204,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 		var serializedEvent = serializeEvent(publication.getEvent());
 
 		operations.update( //
-				SQL_STATEMENT_INSERT, //
+				sqlStatementInsert, //
 				uuidToDatabase(publication.getIdentifier()), //
 				publication.getEvent().getClass().getName(), //
 				publication.getTargetIdentifier().getValue(), //
@@ -171,10 +222,20 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	@Transactional
 	public void markCompleted(Object event, PublicationTargetIdentifier identifier, Instant completionDate) {
 
-		operations.update(SQL_STATEMENT_UPDATE_BY_EVENT_AND_LISTENER_ID, //
+		operations.update(sqlStatementUpdateByEventAndListenerId, //
 				Timestamp.from(completionDate), //
 				identifier.getValue(), //
 				serializer.serialize(event));
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.modulith.events.core.EventPublicationRepository#markCompleted(java.util.UUID, java.time.Instant)
+	 */
+	@Override
+	@Transactional
+	public void markCompleted(UUID identifier, Instant completionDate) {
+		operations.update(sqlStatementUpdateById, Timestamp.from(completionDate), uuidToDatabase(identifier));
 	}
 
 	/*
@@ -186,7 +247,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	public Optional<TargetEventPublication> findIncompletePublicationsByEventAndTargetIdentifier( //
 			Object event, PublicationTargetIdentifier targetIdentifier) {
 
-		var result = operations.query(SQL_STATEMENT_FIND_BY_EVENT_AND_LISTENER_ID, //
+		var result = operations.query(sqlStatementFindByEventAndListenerId, //
 				this::resultSetToPublications, //
 				serializeEvent(event), //
 				targetIdentifier.getValue());
@@ -201,7 +262,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	@Override
 	public List<TargetEventPublication> findCompletedPublications() {
 
-		var result = operations.query(SQL_STATEMENT_FIND_COMPLETED, this::resultSetToPublications);
+		var result = operations.query(sqlStatementFindCompleted, this::resultSetToPublications);
 
 		return result == null ? Collections.emptyList() : result;
 	}
@@ -210,7 +271,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	@Transactional(readOnly = true)
 	@SuppressWarnings("null")
 	public List<TargetEventPublication> findIncompletePublications() {
-		return operations.query(SQL_STATEMENT_FIND_UNCOMPLETED, this::resultSetToPublications);
+		return operations.query(sqlStatementFindUncompleted, this::resultSetToPublications);
 	}
 
 	/*
@@ -220,7 +281,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	@Override
 	public List<TargetEventPublication> findIncompletePublicationsPublishedBefore(Instant instant) {
 
-		var result = operations.query(SQL_STATEMENT_FIND_UNCOMPLETED_BEFORE,
+		var result = operations.query(sqlStatementFindUncompletedBefore,
 				this::resultSetToPublications, Timestamp.from(instant));
 
 		return result == null ? Collections.emptyList() : result;
@@ -233,9 +294,10 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	@Override
 	public void deletePublications(List<UUID> identifiers) {
 
-		var databaseIds = identifiers.stream().map(this::uuidToDatabase).toList();
+		var dbIdentifiers = identifiers.stream().map(databaseType::uuidToDatabase).toList();
 
-		operations.batchUpdate(SQL_STATEMENT_DELETE, batch(databaseIds, DELETE_BATCH_SIZE));
+		batch(dbIdentifiers, DELETE_BATCH_SIZE)
+				.forEach(it -> operations.update(sqlStatementDelete.concat(toParameterPlaceholders(it.length)), it));
 	}
 
 	/*
@@ -244,7 +306,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	 */
 	@Override
 	public void deleteCompletedPublications() {
-		operations.execute(SQL_STATEMENT_DELETE_UNCOMPLETED);
+		operations.execute(sqlStatementDeleteUncompleted);
 	}
 
 	/*
@@ -256,7 +318,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 
 		Assert.notNull(instant, "Instant must not be null!");
 
-		operations.update(SQL_STATEMENT_DELETE_UNCOMPLETED_BEFORE, Timestamp.from(instant));
+		operations.update(sqlStatementDeleteUncompletedBefore, Timestamp.from(instant));
 	}
 
 	private String serializeEvent(Object event) {
@@ -308,7 +370,8 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 		var listenerId = rs.getString("LISTENER_ID");
 		var serializedEvent = rs.getString("SERIALIZED_EVENT");
 
-		return new JdbcEventPublication(id, publicationDate, listenerId, serializedEvent, eventClass, serializer,
+		return new JdbcEventPublication(id, publicationDate, listenerId,
+				() -> serializer.deserialize(serializedEvent, eventClass),
 				completionDate == null ? null : completionDate.toInstant());
 	}
 
@@ -324,7 +387,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 	private Class<?> loadClass(UUID id, String className) {
 
 		try {
-			return Class.forName(className);
+			return ClassUtils.forName(className, classLoader);
 		} catch (ClassNotFoundException e) {
 			LOGGER.warn("Event '{}' of unknown type '{}' found", id, className);
 			return null;
@@ -341,16 +404,22 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 				.toList();
 	}
 
+	private static String toParameterPlaceholders(int length) {
+
+		return IntStream.range(0, length)
+				.mapToObj(__ -> "?")
+				.collect(Collectors.joining(", ", "(", ")"));
+	}
+
 	private static class JdbcEventPublication implements TargetEventPublication {
 
 		private final UUID id;
 		private final Instant publicationDate;
 		private final String listenerId;
-		private final String serializedEvent;
-		private final Class<?> eventType;
+		private final Supplier<Object> eventSupplier;
 
-		private final EventSerializer serializer;
 		private @Nullable Instant completionDate;
+		private @Nullable Object event;
 
 		/**
 		 * @param id must not be {@literal null}.
@@ -361,22 +430,17 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 		 * @param serializer must not be {@literal null}.
 		 * @param completionDate can be {@literal null}.
 		 */
-		public JdbcEventPublication(UUID id, Instant publicationDate, String listenerId, String serializedEvent,
-				Class<?> eventType, EventSerializer serializer, @Nullable Instant completionDate) {
+		public JdbcEventPublication(UUID id, Instant publicationDate, String listenerId, Supplier<Object> event,
+				@Nullable Instant completionDate) {
 
 			Assert.notNull(id, "Id must not be null!");
 			Assert.notNull(publicationDate, "Publication date must not be null!");
 			Assert.hasText(listenerId, "Listener id must not be null or empty!");
-			Assert.hasText(serializedEvent, "Serialized event must not be null or empty!");
-			Assert.notNull(eventType, "Event type must not be null!");
-			Assert.notNull(serializer, "EventSerializer must not be null!");
 
 			this.id = id;
 			this.publicationDate = publicationDate;
 			this.listenerId = listenerId;
-			this.serializedEvent = serializedEvent;
-			this.eventType = eventType;
-			this.serializer = serializer;
+			this.eventSupplier = event;
 			this.completionDate = completionDate;
 		}
 
@@ -394,8 +458,14 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 		 * @see org.springframework.modulith.events.EventPublication#getEvent()
 		 */
 		@Override
+		@SuppressWarnings("null")
 		public Object getEvent() {
-			return serializer.deserialize(serializedEvent, eventType);
+
+			if (event == null) {
+				this.event = eventSupplier.get();
+			}
+
+			return event;
 		}
 
 		/*
@@ -459,12 +529,10 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 			}
 
 			return Objects.equals(completionDate, that.completionDate) //
-					&& Objects.equals(eventType, that.eventType) //
 					&& Objects.equals(id, that.id) //
 					&& Objects.equals(listenerId, that.listenerId) //
 					&& Objects.equals(publicationDate, that.publicationDate) //
-					&& Objects.equals(serializedEvent, that.serializedEvent) //
-					&& Objects.equals(serializer, that.serializer);
+					&& Objects.equals(getEvent(), that.getEvent());
 		}
 
 		/*
@@ -473,7 +541,7 @@ class JdbcEventPublicationRepository implements EventPublicationRepository {
 		 */
 		@Override
 		public int hashCode() {
-			return Objects.hash(completionDate, eventType, id, listenerId, publicationDate, serializedEvent, serializer);
+			return Objects.hash(completionDate, id, listenerId, publicationDate, getEvent());
 		}
 	}
 }

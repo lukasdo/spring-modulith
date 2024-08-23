@@ -30,29 +30,16 @@ import com.tngtech.archunit.core.importer.ImportOption;
 class ModuleDetectionStrategyUnitTest {
 
 	@Test
-	void usesExplicitlyAnnotatedConstant() {
-
-		assertThat(ApplicationModuleDetectionStrategy.explictlyAnnotated())
-				.isEqualTo(ApplicationModuleDetectionStrategies.EXPLICITLY_ANNOTATED);
-	}
-
-	@Test
-	void usesDirectSubPackages() {
-
-		assertThat(ApplicationModuleDetectionStrategy.directSubPackage())
-				.isEqualTo(ApplicationModuleDetectionStrategies.DIRECT_SUB_PACKAGES);
-	}
-
-	@Test
 	void detectsJMoleculesAnnotatedModule() {
 
 		var classes = new ClassFileImporter() //
 				.withImportOption(new ImportOption.OnlyIncludeTests()) //
-				.importPackages("jmolecules");
+				.importPackages("example.jmolecules");
 
-		var javaPackage = JavaPackage.of(Classes.of(classes), "jmolecules");
+		var javaPackage = JavaPackage.of(Classes.of(classes), "example");
+		var expected = javaPackage.getSubPackage("jmolecules").orElseThrow();
 
-		assertThat(ApplicationModuleDetectionStrategy.explictlyAnnotated().getModuleBasePackages(javaPackage))
-				.containsExactly(javaPackage);
+		assertThat(ApplicationModuleDetectionStrategy.explicitlyAnnotated().getModuleBasePackages(javaPackage))
+				.containsExactly(expected);
 	}
 }

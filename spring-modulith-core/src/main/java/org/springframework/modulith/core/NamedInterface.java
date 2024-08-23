@@ -72,12 +72,13 @@ public class NamedInterface implements Iterable<JavaClass> {
 	 */
 	static List<NamedInterface> of(JavaPackage javaPackage) {
 
-		var names = javaPackage.findAnnotation(org.springframework.modulith.NamedInterface.class) //
+		var basePackage = javaPackage.toSingle();
+		var names = basePackage.findAnnotation(org.springframework.modulith.NamedInterface.class) //
 				.map(it -> getDefaultedNames(it, javaPackage.getName())) //
 				.orElseThrow(() -> new IllegalArgumentException(
 						String.format("Couldn't find NamedInterface annotation on package %s!", javaPackage)));
 
-		var classes = javaPackage.toSingle().getExposedClasses();
+		var classes = basePackage.getExposedClasses();
 
 		return names.stream()
 				.<NamedInterface> map(it -> new NamedInterface(it, classes)) //
@@ -132,11 +133,22 @@ public class NamedInterface implements Iterable<JavaClass> {
 		return name;
 	}
 
+	String getQualifiedName(String qualifier) {
+		return qualifier + " :: " + name;
+	}
+
 	/**
 	 * Returns whether this is the unnamed (implicit) {@link NamedInterface}.
 	 */
 	public boolean isUnnamed() {
 		return name.equals(UNNAMED_NAME);
+	}
+
+	/**
+	 * Return whether this {@link NamedInterface} has an explicit name.
+	 */
+	public boolean isNamed() {
+		return !isUnnamed();
 	}
 
 	/**

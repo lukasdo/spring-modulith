@@ -192,7 +192,7 @@ class Asciidoctor {
 		return builder.toString();
 	}
 
-	public String renderConfigurationProperties(ApplicationModule module, List<ModuleProperty> properties) {
+	public String renderConfigurationProperties(List<ModuleProperty> properties) {
 
 		if (properties.isEmpty()) {
 			return "none";
@@ -211,8 +211,7 @@ class Asciidoctor {
 					if (defaultValue != null && StringUtils.hasText(defaultValue)) {
 
 						builder = builder.append(", default ")
-								.append(toInlineCode(defaultValue))
-								.append("");
+								.append(toInlineCode(defaultValue));
 					}
 
 					var description = it.description();
@@ -367,5 +366,17 @@ class Asciidoctor {
 				.collect(Collectors.joining("\n"));
 
 		return bullets.isBlank() ? "None" : bullets;
+	}
+
+	public String renderHeadline(int i, String modules) {
+		return "=".repeat(i) + " " + modules + System.lineSeparator();
+	}
+
+	public String renderPlantUmlInclude(String componentsFilename) {
+		return "plantuml::" + componentsFilename + "[]" + System.lineSeparator();
+	}
+
+	public String renderGeneralInclude(String componentsFilename) {
+		return "include::" + componentsFilename + "[]" + System.lineSeparator();
 	}
 }

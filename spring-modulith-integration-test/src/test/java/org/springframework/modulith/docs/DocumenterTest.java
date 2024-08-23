@@ -21,15 +21,18 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Comparator;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.modulith.core.DependencyType;
 import org.springframework.modulith.docs.Documenter.DiagramOptions;
+import org.springframework.modulith.docs.Documenter.Options;
 
 import com.acme.myproject.Application;
 
@@ -37,6 +40,8 @@ import com.acme.myproject.Application;
  * Unit tests for {@link Documenter}.
  *
  * @author Oliver Drotbohm
+ * @author Cora Iberkleid
+ * @author Tobias Haindl
  */
 class DocumenterTest {
 
@@ -72,24 +77,138 @@ class DocumenterTest {
 	}
 
 	@Test
-	void customizesOutputLocation() throws IOException {
+	void customizesOutputLocation() throws Exception {
 
-		String customOutputFolder = "build/spring-modulith";
-		Path path = Paths.get(customOutputFolder);
+		doWith("target/custom-spring-modulith", (path, documenter) -> {
 
-		try {
-
-			new Documenter(ApplicationModules.of(Application.class), customOutputFolder).writeModuleCanvases();
+			documenter.writeModuleCanvases();
 
 			assertThat(Files.list(path)).isNotEmpty();
 			assertThat(path).exists();
+		});
+	}
 
-		} finally {
+	@Test // GH-638
+	void createsAggregatingDocumentOnlyIfPartialsExist() throws Exception {
 
-			Files.walk(path)
-					.sorted(Comparator.reverseOrder())
-					.map(Path::toFile)
-					.forEach(File::delete);
+		doWith("build/spring-modulith", (path, documenter) -> {
+
+			// all-docs.adoc should be created
+			documenter.writeDocumentation();
+
+			var numberOfModules = documenter.getModules().stream().count();
+
+			// 2 per module (PlantUML + Canvas) + component overview + aggregating doc
+			var expectedFiles = numberOfModules * 2 + 2;
+
+			// 3 per module (headline + PlantUML + Canvas) + component headline + component PlantUML
+			var expectedLines = numberOfModules * 3 + 2;
+
+			assertThat(Files.walk(path).filter(Files::isRegularFile).count())
+					.isEqualTo(expectedFiles);
+
+			assertThat(path.resolve("all-docs.adoc")).exists().satisfies(doc -> {
+				assertThat(Files.lines(doc)
+						.filter(line -> !line.trim().isEmpty())
+						.count()).isEqualTo(expectedLines);
+			});
+		});
+	}
+
+	@Test // GH-638
+	void doesNotCreateAggregatingDocumentIfNoPartialsExist() throws Exception {
+
+		doWith("build/spring-modulith", (path, documenter) -> {
+
+			documenter.writeDocumentation();
+
+			deleteDirectoryContents(path);
+
+			documenter.writeAggregatingDocument();
+
+			var aggregatingDoc = path.resolve("all-docs.adoc");
+
+			assertThat(aggregatingDoc).doesNotExist();
+		});
+	}
+
+	@Test // GH-644
+	void cleansOutputDirectoryByDefault(@TempDir Path outputDirectory) {
+
+		doWith(outputDirectory.toString(), (path, documenter) -> {
+
+			var filePath = createTestFile(path);
+			var nestedFiledPath = createTestFileInSubdirectory(path);
+
+			documenter.writeDocumentation();
+
+			assertThat(filePath).doesNotExist();
+			assertThat(nestedFiledPath).doesNotExist();
+			assertThat(Files.list(path)).isNotEmpty();
+		});
+
+	}
+
+	@Test // GH-644
+	void doesNotCleanOutputDirectoryIfConfigured(@TempDir Path outputDirectory) throws IOException {
+
+		doWith(outputDirectory.toString(), it -> it.withoutClean(), (path, documenter) -> {
+
+			var filePath = createTestFile(path);
+			var nestedFiledPath = createTestFileInSubdirectory(path);
+
+			documenter.writeDocumentation();
+
+			assertThat(filePath).exists();
+			assertThat(nestedFiledPath).exists();
+			assertThat(Files.list(path)).isNotEmpty();
+		});
+	}
+
+	private static Path createTestFile(Path tempDir) throws IOException {
+		return createFile(tempDir.resolve("some-old-module.adoc"));
+	}
+
+	private static Path createTestFileInSubdirectory(Path tempDir) throws IOException {
+		return createFile(tempDir.resolve("some-subdirectory").resolve("old-module.adoc"));
+	}
+
+	private static Path createFile(Path filePath) throws IOException {
+		return Files.createDirectories(filePath);
+	}
+
+	private static void deleteDirectoryContents(Path path) throws IOException {
+
+		if (Files.exists(path) && Files.isDirectory(path)) {
+			try (Stream<Path> walk = Files.walk(path)) {
+				walk.sorted(Comparator.reverseOrder())
+						.filter(p -> !p.equals(path)) // Ensure we don't delete the directory itself
+						.map(Path::toFile)
+						.forEach(File::delete);
+			}
 		}
+	}
+
+	private static void doWith(String path, ThrowingBiConsumer<Path, Documenter> consumer) {
+		doWith(path, Function.identity(), consumer);
+	}
+
+	private static void doWith(String path, Function<Options, Options> customizer,
+			ThrowingBiConsumer<Path, Documenter> consumer) {
+
+		var options = customizer.apply(Options.defaults().withOutputFolder(path));
+		var modules = ApplicationModules.of(Application.class);
+
+		try {
+			consumer.accept(Path.of(path), new Documenter(modules, options));
+		} catch (Exception o_O) {
+			throw new RuntimeException(o_O);
+		} finally {
+			options.getOutputFolder().deleteIfExists();
+		}
+	}
+
+	private interface ThrowingBiConsumer<T, S> {
+		void accept(T t, S s) throws Exception;
 	}
 }

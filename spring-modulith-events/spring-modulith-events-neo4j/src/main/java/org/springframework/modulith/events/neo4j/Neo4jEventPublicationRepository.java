@@ -107,6 +107,12 @@ class Neo4jEventPublicationRepository implements EventPublicationRepository {
 	private static final Statement COMPLETE_STATEMENT = Cypher.match(EVENT_PUBLICATION_NODE)
 			.where(EVENT_PUBLICATION_NODE.property(EVENT_HASH).eq(Cypher.parameter(EVENT_HASH)))
 			.and(EVENT_PUBLICATION_NODE.property(LISTENER_ID).eq(Cypher.parameter(LISTENER_ID)))
+			.and(EVENT_PUBLICATION_NODE.property(COMPLETION_DATE).isNull())
+			.set(EVENT_PUBLICATION_NODE.property(COMPLETION_DATE).to(Cypher.parameter(COMPLETION_DATE)))
+			.build();
+
+	private static final Statement COMPLETE_BY_ID_STATEMENT = Cypher.match(EVENT_PUBLICATION_NODE)
+			.where(EVENT_PUBLICATION_NODE.property(ID).eq(Cypher.parameter(ID)))
 			.set(EVENT_PUBLICATION_NODE.property(COMPLETION_DATE).to(Cypher.parameter(COMPLETION_DATE)))
 			.build();
 
@@ -181,6 +187,20 @@ class Neo4jEventPublicationRepository implements EventPublicationRepository {
 		neo4jClient.query(renderer.render(COMPLETE_STATEMENT))
 				.bind(eventHash).to(EVENT_HASH)
 				.bind(identifier.getValue()).to(LISTENER_ID)
+				.bind(Values.value(completionDate.atOffset(ZoneOffset.UTC))).to(COMPLETION_DATE)
+				.run();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.modulith.events.core.EventPublicationRepository#markCompleted(java.util.UUID, java.time.Instant)
+	 */
+	@Override
+	@Transactional
+	public void markCompleted(UUID identifier, Instant completionDate) {
+
+		neo4jClient.query(renderer.render(COMPLETE_BY_ID_STATEMENT))
+				.bind(Values.value(identifier.toString())).to(ID)
 				.bind(Values.value(completionDate.atOffset(ZoneOffset.UTC))).to(COMPLETION_DATE)
 				.run();
 	}

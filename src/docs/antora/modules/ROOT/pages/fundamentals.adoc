@@ -158,7 +158,7 @@ icon:cubes[] Example
    ├─ **icon:cube[] example.order**
    |  └─ icon:plus-circle[role=green] OrderManagement.java
    └─ icon:cube[] example.order.internal
-      └─ icon:plus-circle[role=green] SomethingOrderInternal.java
+      └─ icon:plus-circle[role=red] SomethingOrderInternal.java
 ----
 
 In such an arrangement, the `order` package is considered an API package.
@@ -169,8 +169,56 @@ Note how `SomethingOrderInternal` is a public type, likely because `OrderManagem
 This unfortunately means that it can also be referred to from other packages such as the `inventory` one.
 In this case, the Java compiler is not of much use to prevent these illegal references.
 
-[[modules.advanced.open]]
-==== Open Application Modules
+[[modules.nested]]
+=== Nested Application Modules
+
+As of version 1.3, Spring Modulith application modules can contain nested modules.
+This allows governing the internal structure in case a module contains parts to be logically separated in turn.
+To define nested application modules, explicitly annotate packages that are supposed to constitute with `@ApplicationModule`.
+
+[source, subs="macros, quotes"]
+----
+icon:cubes[] Example
+└─ icon:folder[] src/main/java
+   |
+   ├─ icon:cube[] example
+   |  └─ icon:plus-circle[role=green] Application.java
+   |
+   |  -> Inventory
+   |
+   ├─ icon:cube[] example.inventory
+   |  ├─ icon:plus-circle[role=green] InventoryManagement.java
+   |  └─ icon:minus-circle[role=red] SomethingInventoryInternal.java
+   ├─ icon:cube[] example.inventory.internal
+   |  └─ icon:plus-circle[role=red] SomethingInventoryInternal.java
+   |
+   |  -> Inventory > Nested
+   |
+   ├─ icon:cube[] example.inventory.nested
+   |  ├─ icon:coffee[] package-info.java // @ApplicationModule
+   |  └─ icon:plus-circle[role=yellow] NestedApi.java
+   ├─ icon:cube[] example.inventory.nested.internal
+   |  └─ icon:minus-circle[role=red] NestedInternal.java
+   |
+   |  -> Order
+   |
+   └─ icon:cube[] example.order
+      ├─ icon:plus-circle[role=green] OrderManagement.java
+      └─ icon:minus-circle[role=red] SomethingOrderInternal.java
+----
+
+In this example `inventory` is an application module as described xref:fundamentals.adoc#modules.simple[above].
+The `@ApplicationModule` annotation on the `nested` package caused that to become a nested application module in turn.
+In that arrangement, the following access rules apply:
+
+* The code in _Nested_ is only available from _Inventory_, i.e. only any of the `SomethingInventoryInternal` types can access `NestedApi`. `NestedInternal` is only accessible from `NestedApi`.
+* Any code in the _Nested_ module can access code in parent modules, even internal.
+I.e., both `NestedApi` and `NestedInternal` can access `inventory.internal.SomethingInventoryInternal`.
+* Code from nested modules can also access exposed types by top-level application modules.
+Any code in `nested` (or any sub-packages) can access `OrderManagement`.
+
+[[modules.open, modules.advanced.open]]
+=== Open Application Modules
 
 The arrangement described xref:fundamentals.adoc#modules.advanced[above] are considered closed as they only expose types to other modules that are actively selected for exposure.
 When applying Spring Modulith to legacy applications, hiding all types located in nested packages from other modules might be inadequate or require marking all those packages for exposure, too.
@@ -293,6 +341,7 @@ The effect of that declaration is twofold: first, code in other application modu
 Application modules are able to refer to the named interface in explicit dependency declarations.
 Assume the __inventory__ module was making use of that, it could refer to the above declared named interface like this:
 
+.Defining allowed dependencies to dedicated named interfaces
 [tabs]
 ======
 Java::
@@ -300,7 +349,7 @@ Java::
 [source, java, role="primary", chomp="none"]
 ----
 @org.springframework.modulith.ApplicationModule(
-  allowedDependencies = "order::spi"
+  allowedDependencies = "order :: spi"
 )
 package example.inventory;
 ----
@@ -309,7 +358,7 @@ Kotlin::
 [source, kotlin, role="secondary", chomp="none"]
 ----
 @org.springframework.modulith.ApplicationModule(
-  allowedDependencies = "order::spi"
+  allowedDependencies = "order :: spi"
 )
 package example.inventory
 ----
@@ -319,15 +368,51 @@ Note how we concatenate the named interface's name `spi` via the double colon `:
 In this setup, code in __inventory__ would be allowed to depend on `SomeSpiInterface` and other code residing in the `order.spi` interface, but not on `OrderManagement` for example.
 For modules without explicitly described dependencies, both the application module root package *and* the SPI one are accessible.
 
+If you wanted to express that an application module is allowed to refer to all explicitly declared named interfaces, you can use the asterisk (``*``) as follows:
+
+.Using the asterisk to declare allowed dependencies to all declared named interfaces
+[tabs]
+======
+Java::
++
+[source, java, role="primary", chomp="none"]
+----
+@org.springframework.modulith.ApplicationModule(
+  allowedDependencies = "order :: *"
+)
+package example.inventory;
+----
+Kotlin::
++
+[source, kotlin, role="secondary", chomp="none"]
+----
+@org.springframework.modulith.ApplicationModule(
+  allowedDependencies = "order :: *"
+)
+package example.inventory
+----
+======
+
 [[customizing-modules]]
 === Customizing Module Detection
 
-If the default application module model does not work for your application, the detection of the modules can be customized by providing an implementation of `ApplicationModuleDetectionStrategy`.
+By default, application modules will be expected to be located in direct sub-packages of the package the Spring Boot application class resides in.
+An alternative detection strategy can be activated to only consider package explicitly annotated, either via Spring Modulith's `@ApplicationModule` or jMolecules `@Module` annotation.
+That strategy can be activated by configuring the `spring.modulith.detection-strategy` to `explicitly-annotated`.
+
+.Switching the application module detection strategy to only consider annotated packages
+[source, text]
+----
+spring.modulith.detection-strategy=explicitly-annotated
+----
+
+If the neither default application module detection strategy nor the manually annotated one does not work for your application, the detection of the modules can be customized by providing an implementation of `ApplicationModuleDetectionStrategy`.
 That interface exposes a single method `Stream<JavaPackage> getModuleBasePackages(JavaPackage)` and will be called with the package the Spring Boot application class resides in.
 You can then inspect the packages residing within that and select the ones to be considered application module base packages based on a naming convention or the like.
 
 Assume you declare a custom `ApplicationModuleDetectionStrategy` implementation like this:
 
+.Implementing a custom `ApplicationModuleDetectionStrategy`
 [tabs]
 ======
 Java::
@@ -359,12 +444,11 @@ class CustomApplicationModuleDetectionStrategy : ApplicationModuleDetectionStrat
 ----
 ======
 
-This class needs to be registered in `META-INF/spring.factories` as follows:
+This class can now be registered as `spring.modulith.detection-strategy` as follows:
 
 [source, text]
 ----
-org.springframework.modulith.core.ApplicationModuleDetectionStrategy=\
-  example.CustomApplicationModuleDetectionStrategy
+spring.modulith.detection-strategy=example.CustomApplicationModuleDetectionStrategy
 ----
 
 [[customizing-modules-arrangement]]
@@ -424,7 +508,7 @@ The annotation exposes the following attributes to customize:
 |The human readable name of the application to be used in generated xref:documentation.adoc#documentation[documentation].
 
 |`sharedModules`
-|Declares the application modules with the given names as shared modules, which means that they will be always included in xref:testing.adoc#testing[application module integration tests].
+|Declares the application modules with the given names as shared modules, which means that they will always be included in xref:testing.adoc#testing[application module integration tests].
 
 |`additionalPackages`
 |Instructs Spring Modulith to treat the configured packages as additional root application packages. In other words, application module detection will be triggered for those as well.

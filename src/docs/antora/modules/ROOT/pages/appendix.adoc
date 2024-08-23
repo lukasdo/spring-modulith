@@ -13,6 +13,11 @@
 |`true`
 |Whether to configure defaults for the async processing termination, namely to wait for task completion for 2 seconds. See `TaskExecutionProperties` for details.
 
+|`spring.modulith.detection-strategy`
+|none
+|The strategy to be applied to detect application modules.
+Can either be the class name of a custom implementation of `ApplicationModuleDetectionStrategy` or `direct-subpackages` (which is also the final fallback if nothing is configured) or `explicitly-annotated` to only select packages explicitly annotated with `@ApplicationModule` or jMolecules' `@Module`. See xref:fundamentals.adoc#customizing-modules[Customize Application Module Detection] for details.
+
 |`spring.modulith.events.externalization.enabled`
 |`true`
 |Whether to enable event externalization.
@@ -21,7 +26,11 @@
 |`false`
 |Whether to initialize the JDBC event publication schema.
 
-|`spring.modulith.events.kafka.json-enabled`
+|`spring.modulith.events.jdbc.schema`
+|
+|The schema name for the event publication table. If not specified, the table will not be schema-qualified.
+
+|`spring.modulith.events.kafka.enable-json`
 |`true`
 |Whether to enable JSON support for `KafkaTemplate`.
 
@@ -33,7 +42,7 @@
 |`false`
 |Whether to create indexes on the .
 
-|`spring.modulith.events.rabbitmq.json-enabled`
+|`spring.modulith.events.rabbitmq.enable-json`
 |`true`
 |Whether to enable JSON support for `RabbitTemplate`.
 
@@ -104,6 +113,14 @@ a|* `spring-modulith-starter-core`
 * `spring-modulith-events-mongodb` (runtime)
 * `spring-modulith-events-jackson` (runtime)
 
+|`spring-modulith-starter-neo4j`
+|`compile`
+a|* `spring-modulith-starter-core`
+* `spring-modulith-events-api`
+* `spring-modulith-events-core` (runtime)
+* `spring-modulith-events-neo4j` (runtime)
+* `spring-modulith-events-jackson` (runtime)
+
 |`spring-modulith-starter-test`
 |`test`
 a|* `spring-modulith-docs`
@@ -127,6 +144,7 @@ a|* `spring-modulith-docs`
 |`spring-modulith-events-jpa`|`runtime`|A JPA-based implementation of the `EventPublicationRegistry`.
 |`spring-modulith-events-kafka`|`runtime`|Event externalization support for Kafka.
 |`spring-modulith-events-mongodb`|`runtime`|A MongoDB-based implementation of the `EventPublicationRegistry`.
+|`spring-modulith-events-neo4j`|`runtime`|A Neo4j-based implementation of the `EventPublicationRegistry`.
 |`spring-modulith-moments`|`compile`|The Passage of Time events implementation described xref:moments.adoc[here].
 |`spring-modulith-runtime`|`runtime`|Support to bootstrap an `ApplicationModules` instance at runtime. Usually not directly depended on but transitively used by `spring-modulith-actuator` and `spring-modulith-observability`.
 |`spring-modulith-observability`|`runtime`|Observability infrastructure described <<observability, here>>.

@@ -37,9 +37,9 @@ import org.jgrapht.traverse.TopologicalOrderIterator;
 import org.jmolecules.archunit.JMoleculesDddRules;
 import org.springframework.aot.generate.Generated;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
-import org.springframework.core.io.support.SpringFactoriesLoader;
 import org.springframework.lang.Nullable;
 import org.springframework.modulith.core.Types.JMoleculesTypes;
+import org.springframework.modulith.core.Violations.Violation;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.function.SingletonSupplier;
@@ -64,7 +64,7 @@ import com.tngtech.archunit.library.dependencies.SlicesRuleDefinition;
 public class ApplicationModules implements Iterable<ApplicationModule> {
 
 	private static final Map<CacheKey, ApplicationModules> CACHE = new ConcurrentHashMap<>();
-	private static final ApplicationModuleDetectionStrategy DETECTION_STRATEGY;
+
 	private static final ImportOption IMPORT_OPTION = new ImportOption.DoNotIncludeTests();
 	private static final boolean JGRAPHT_PRESENT = ClassUtils.isPresent("org.jgrapht.Graph",
 			ApplicationModules.class.getClassLoader());
@@ -72,21 +72,6 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	private static final DescribedPredicate<HasName> IS_SPRING_CGLIB_PROXY = nameContaining("$$SpringCGLIB$$");
 
 	static {
-
-		List<ApplicationModuleDetectionStrategy> loadFactories = SpringFactoriesLoader.loadFactories(
-				ApplicationModuleDetectionStrategy.class,
-				ApplicationModules.class.getClassLoader());
-
-		if (loadFactories.size() > 1) {
-
-			throw new IllegalStateException(
-					String.format("Multiple module detection strategies configured. Only one supported! %s",
-							loadFactories));
-		}
-
-		DETECTION_STRATEGY = loadFactories.isEmpty() ? ApplicationModuleDetectionStrategies.DIRECT_SUB_PACKAGES
-				: loadFactories.get(0);
-
 		IS_AOT_TYPE = ClassUtils.isPresent("org.springframework.aot.generate.Generated",
 				ApplicationModules.class.getClassLoader()) ? getAtGenerated() : DescribedPredicate.alwaysFalse();
 	}
@@ -106,23 +91,66 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 
 	private boolean verified;
 
+	/**
+	 * Creates a new {@link ApplicationModules} instance.
+	 *
+	 * @param metadata must not be {@literal null}.
+	 * @param ignored must not be {@literal null}.
+	 * @param useFullyQualifiedModuleNames can be {@literal null}.
+	 * @param option must not be {@literal null}.
+	 */
+	protected ApplicationModules(ModulithMetadata metadata,
+			DescribedPredicate<? super JavaClass> ignored, boolean useFullyQualifiedModuleNames, ImportOption option) {
+		this(metadata, metadata.getBasePackages(), ignored, useFullyQualifiedModuleNames, option);
+	}
+
+	/**
+	 * Creates a new {@link ApplicationModules} instance.
+	 *
+	 * @param metadata must not be {@literal null}.
+	 * @param packages must not be {@literal null}.
+	 * @param ignored must not be {@literal null}.
+	 * @param useFullyQualifiedModuleNames can be {@literal null}.
+	 * @param option must not be {@literal null}.
+	 * @deprecated since 1.2, for removal in 1.3. Use {@link ApplicationModules(ModulithMetadata, DescribedPredicate,
+	 *             boolean, ImportOption)} instead and set up {@link ModulithMetadata} to contain the packages you want to
+	 *             use.
+	 */
+	@Deprecated(forRemoval = true)
 	protected ApplicationModules(ModulithMetadata metadata, Collection<String> packages,
-			DescribedPredicate<JavaClass> ignored, boolean useFullyQualifiedModuleNames, ImportOption option) {
+			DescribedPredicate<? super JavaClass> ignored, boolean useFullyQualifiedModuleNames, ImportOption option) {
+
+		Assert.notNull(metadata, "ModulithMetadata must not be null!");
+		Assert.notNull(packages, "Base packages must not be null!");
+		Assert.notNull(ignored, "Ignores must not be null!");
+		Assert.notNull(option, "ImportOptions must not be null!");
+
+		DescribedPredicate<? super JavaClass> excluded = DescribedPredicate.or(ignored, IS_AOT_TYPE, IS_SPRING_CGLIB_PROXY);
 
 		this.metadata = metadata;
 		this.allClasses = new ClassFileImporter() //
 				.withImportOption(option) //
 				.importPackages(packages) //
-				.that(not(ignored.or(IS_AOT_TYPE).or(IS_SPRING_CGLIB_PROXY)));
+				.that(not(excluded));
 
 		Assert.notEmpty(allClasses, () -> "No classes found in packages %s!".formatted(packages));
 
 		Classes classes = Classes.of(allClasses);
+		var strategy = ApplicationModuleDetectionStrategyLookup.getStrategy();
 
-		this.modules = packages.stream() //
+		var sources = packages.stream() //
 				.map(it -> JavaPackage.of(classes, it))
-				.flatMap(DETECTION_STRATEGY::getModuleBasePackages) //
-				.map(it -> new ApplicationModule(it, useFullyQualifiedModuleNames)) //
+				.flatMap(it -> ApplicationModuleSource.from(it, strategy, useFullyQualifiedModuleNames))
+				.distinct()
+				.collect(Collectors.toUnmodifiableSet());
+
+		this.modules = sources.stream() //
+				.map(it -> {
+
+					return new ApplicationModule(it,
+							JavaPackages.onlySubPackagesOf(it.moduleBasePackage(),
+									sources.stream().map(ApplicationModuleSource::moduleBasePackage).toList())); //
+				})
 				.collect(toMap(ApplicationModule::getName, Function.identity()));
 
 		this.rootPackages = packages.stream() //
@@ -135,9 +163,13 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 
 		this.sharedModules = Collections.emptySet();
 
-		this.orderedNames = JGRAPHT_PRESENT //
-				? TopologicalSorter.topologicallySortModules(this) //
-				: modules.values().stream().map(ApplicationModule::getName).toList();
+		Supplier<List<String>> fallback = () -> modules.values().stream()
+				.map(ApplicationModule::getName)
+				.sorted()
+				.toList();
+
+		this.orderedNames = Optional.ofNullable(JGRAPHT_PRESENT ? TopologicalSorter.topologicallySortModules(this) : null)
+				.orElseGet(fallback);
 	}
 
 	/**
@@ -189,26 +221,33 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	}
 
 	/**
-	 * Creates a new {@link ApplicationModules} relative to the given modulith type, a
-	 * {@link ApplicationModuleDetectionStrategy} and a {@link DescribedPredicate} which types and packages to ignore.
-	 * Will inspect the {@link org.springframework.modulith.Modulith} and {@link org.springframework.modulith.Modulithic}
-	 * annotations on the class given for advanced customizations of the module setup.
+	 * Creates a new {@link ApplicationModules} relative to the given modulith type, and a {@link DescribedPredicate}
+	 * which types and packages to ignore. Will inspect the {@link org.springframework.modulith.Modulith} and
+	 * {@link org.springframework.modulith.Modulithic} annotations on the class given for advanced customizations of the
+	 * module setup.
 	 *
 	 * @param modulithType must not be {@literal null}.
 	 * @param ignored must not be {@literal null}.
 	 * @return will never be {@literal null}.
 	 */
-	public static ApplicationModules of(Class<?> modulithType, DescribedPredicate<JavaClass> ignored) {
+	public static ApplicationModules of(Class<?> modulithType, DescribedPredicate<? super JavaClass> ignored) {
 
-		CacheKey key = new TypeKey(modulithType, ignored);
+		Assert.notNull(modulithType, "Modulith root type must not be null!");
+		Assert.notNull(ignored, "Predicate to describe ignored types must not be null!");
 
-		return CACHE.computeIfAbsent(key, it -> {
+		return of(CacheKey.of(modulithType, ignored, IMPORT_OPTION));
+	}
 
-			Assert.notNull(modulithType, "Modulith root type must not be null!");
-			Assert.notNull(ignored, "Predicate to describe ignored types must not be null!");
-
-			return of(key);
-		});
+	/**
+	 * Creates a new {@link ApplicationModules} instance for the given type and {@link ImportOption}.
+	 *
+	 * @param modulithType must not be {@literal null}.
+	 * @param options must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.2
+	 */
+	public static ApplicationModules of(Class<?> modulithType, ImportOption options) {
+		return of(CacheKey.of(modulithType, alwaysFalse(), options));
 	}
 
 	/**
@@ -230,15 +269,22 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 */
 	public static ApplicationModules of(String javaPackage, DescribedPredicate<JavaClass> ignored) {
 
-		CacheKey key = new PackageKey(javaPackage, ignored);
+		Assert.hasText(javaPackage, "Base package must not be null or empty!");
+		Assert.notNull(ignored, "Predicate to describe ignored types must not be null!");
 
-		return CACHE.computeIfAbsent(key, it -> {
+		return of(CacheKey.of(javaPackage, ignored, IMPORT_OPTION));
+	}
 
-			Assert.hasText(javaPackage, "Base package must not be null or empty!");
-			Assert.notNull(ignored, "Predicate to describe ignored types must not be null!");
-
-			return of(key);
-		});
+	/**
+	 * Creates a new {@link ApplicationModules} instance for the given package and {@link ImportOption}.
+	 *
+	 * @param javaPackage must not be {@literal null}.
+	 * @param options must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.2
+	 */
+	public static ApplicationModules of(String javaPackage, ImportOption options) {
+		return of(CacheKey.of(javaPackage, alwaysFalse(), options));
 	}
 
 	/**
@@ -274,7 +320,6 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 * Returns whether the given {@link JavaClass} is contained within the {@link ApplicationModules}.
 	 *
 	 * @param type must not be {@literal null}.
-	 * @return
 	 */
 	public boolean contains(JavaClass type) {
 
@@ -282,6 +327,18 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 
 		return modules.values().stream() //
 				.anyMatch(module -> module.contains(type));
+	}
+
+	/**
+	 * Returns whether the given {@link Class} is contained within the {@link ApplicationModules}.
+	 *
+	 * @param type must not be {@literal null}.
+	 */
+	public boolean contains(Class<?> type) {
+
+		Assert.notNull(type, "Type must not be null!");
+
+		return allClasses.contain(type) && contains(allClasses.get(type));
 	}
 
 	/**
@@ -401,7 +458,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		Violations violations = rootPackages.stream() //
 				.map(this::assertNoCyclesFor) //
 				.flatMap(it -> it.getDetails().stream()) //
-				.map(IllegalStateException::new) //
+				.map(Violation::new) //
 				.collect(Violations.toViolations());
 
 		if (JMoleculesTypes.areRulesPresent()) {
@@ -467,6 +524,30 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		};
 	}
 
+	/**
+	 * Returns the parent {@link ApplicationModule} if the given one has one.
+	 *
+	 * @param module must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.3
+	 */
+	public Optional<ApplicationModule> getParentOf(ApplicationModule module) {
+
+		Assert.notNull(module, "ApplicationModule must not be null!");
+
+		return module.getParentModule(this);
+	}
+
+	/**
+	 * Returns whether the given {@link ApplicationModule} has a parent one.
+	 *
+	 * @param module must not be {@literal null}.
+	 * @since 1.3
+	 */
+	public boolean hasParent(ApplicationModule module) {
+		return getParentOf(module).isPresent();
+	}
+
 	/*
 	 * (non-Javadoc)
 	 * @see java.lang.Iterable#iterator()
@@ -484,6 +565,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	public String toString() {
 
 		return this.stream()
+				.sorted()
 				.map(it -> it.toString(this))
 				.collect(Collectors.joining("\n"));
 	}
@@ -498,7 +580,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		var result = SlicesRuleDefinition.slices() //
 				.assignedFrom(new ApplicationModulesSliceAssignment())
 				.should().beFreeOfCycles() //
-				.evaluate(allClasses.that(resideInAPackage(rootPackage.getName().concat(".."))));
+				.evaluate(allClasses.that(resideInAPackage(rootPackage.asFilter())));
 
 		return result.getFailureReport();
 	}
@@ -554,24 +636,22 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 * @param key must not be {@literal null}.
 	 * @return will never be {@literal null}.
 	 */
-	private static ApplicationModules of(CacheKey key) {
+	private static ApplicationModules of(CacheKey cacheKey) {
 
-		Assert.notNull(key, "Cache key must not be null!");
+		Assert.notNull(cacheKey, "Cache key must not be null!");
 
-		var metadata = key.getMetadata();
+		return CACHE.computeIfAbsent(cacheKey, key -> {
 
-		var basePackages = new HashSet<String>();
-		basePackages.add(key.getBasePackage());
-		basePackages.addAll(metadata.getAdditionalPackages());
+			var metadata = key.getMetadata();
+			var modules = new ApplicationModules(metadata, key.getIgnored(),
+					metadata.useFullyQualifiedModuleNames(), key.getOptions());
 
-		var modules = new ApplicationModules(metadata, basePackages, key.getIgnored(),
-				metadata.useFullyQualifiedModuleNames(), IMPORT_OPTION);
+			var sharedModules = metadata.getSharedModuleNames() //
+					.map(modules::getRequiredModule) //
+					.collect(Collectors.toSet());
 
-		var sharedModules = metadata.getSharedModuleNames() //
-				.map(modules::getRequiredModule) //
-				.collect(Collectors.toSet());
-
-		return modules.withSharedModules(sharedModules);
+			return modules.withSharedModules(sharedModules);
+		});
 	}
 
 	/**
@@ -581,14 +661,11 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 * @return will never be {@literal null}.
 	 * @since 1.1
 	 */
-	private static ApplicationModule rootModuleFor(JavaPackage javaPackage) {
+	private static ApplicationModule rootModuleFor(JavaPackage pkg) {
 
-		return new ApplicationModule(javaPackage, true) {
+		var source = ApplicationModuleSource.from(pkg, "root:" + pkg.getName());
 
-			@Override
-			public String getName() {
-				return "root:" + super.getName();
-			}
+		return new ApplicationModule(source, JavaPackages.NONE) {
 
 			@Override
 			public boolean isRootModule() {
@@ -611,57 +688,40 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		}
 	}
 
-	private static interface CacheKey {
+	private static class CacheKey {
 
-		String getBasePackage();
+		private final DescribedPredicate<? super JavaClass> ignored;
+		private final ImportOption options;
+		private final Object metadataSource;
+		private final Supplier<ModulithMetadata> metadata;
 
-		DescribedPredicate<JavaClass> getIgnored();
+		public CacheKey(DescribedPredicate<? super JavaClass> ignored, ImportOption options, Object metadataSource,
+				Supplier<ModulithMetadata> metadata) {
 
-		ModulithMetadata getMetadata();
-	}
-
-	private static final class TypeKey implements CacheKey {
-
-		private final Class<?> type;
-		private final DescribedPredicate<JavaClass> ignored;
-
-		/**
-		 * Creates a new {@link TypeKey} for the given type and {@link DescribedPredicate} of ignored {@link JavaClass}es.
-		 *
-		 * @param type must not be {@literal null}.
-		 * @param ignored must not be {@literal null}.
-		 */
-		TypeKey(Class<?> type, DescribedPredicate<JavaClass> ignored) {
-
-			this.type = type;
 			this.ignored = ignored;
+			this.options = options;
+			this.metadataSource = metadataSource;
+			this.metadata = SingletonSupplier.of(metadata);
 		}
 
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.Modules.CacheKey#getBasePackage()
-		 */
-		@Override
-		public String getBasePackage() {
-			return type.getPackage().getName();
+		static CacheKey of(String pkg, DescribedPredicate<? super JavaClass> ignored, ImportOption options) {
+			return new CacheKey(ignored, options, pkg, () -> ModulithMetadata.of(pkg));
 		}
 
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.Modules.CacheKey#getMetadata()
-		 */
-		@Override
-		public ModulithMetadata getMetadata() {
-			return ModulithMetadata.of(type);
+		static CacheKey of(Class<?> type, DescribedPredicate<? super JavaClass> ignored, ImportOption options) {
+			return new CacheKey(ignored, options, type, () -> ModulithMetadata.of(type));
 		}
 
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.ApplicationModules.CacheKey#getIgnored()
-		 */
-		@Override
-		public DescribedPredicate<JavaClass> getIgnored() {
+		DescribedPredicate<? super JavaClass> getIgnored() {
 			return ignored;
+		}
+
+		ModulithMetadata getMetadata() {
+			return metadata.get();
+		}
+
+		ImportOption getOptions() {
+			return options;
 		}
 
 		/*
@@ -671,16 +731,17 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		@Override
 		public boolean equals(Object obj) {
 
-			if (this == obj) {
+			if (obj == this) {
 				return true;
 			}
 
-			if (!(obj instanceof TypeKey other)) {
+			if (!(obj instanceof CacheKey that)) {
 				return false;
 			}
 
-			return Objects.equals(this.type, other.type) //
-					&& Objects.equals(this.ignored, other.ignored);
+			return Objects.equals(this.ignored, that.ignored)
+					&& Objects.equals(this.options, that.options)
+					&& Objects.equals(this.metadataSource, that.metadataSource);
 		}
 
 		/*
@@ -689,80 +750,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 		 */
 		@Override
 		public int hashCode() {
-			return Objects.hash(type, ignored);
-		}
-	}
-
-	private static final class PackageKey implements CacheKey {
-
-		private final String basePackage;
-		private final DescribedPredicate<JavaClass> ignored;
-
-		/**
-		 * Creates a new {@link PackageKey} for the given base package and {@link DescribedPredicate} of ignored
-		 * {@link JavaClass}es.
-		 *
-		 * @param basePackage must not be {@literal null}.
-		 * @param ignored must not be {@literal null}.
-		 */
-		PackageKey(String basePackage, DescribedPredicate<JavaClass> ignored) {
-
-			this.basePackage = basePackage;
-			this.ignored = ignored;
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.ApplicationModules.CacheKey#getBasePackage()
-		 */
-		@Override
-		public String getBasePackage() {
-			return basePackage;
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.ApplicationModules.CacheKey#getIgnored()
-		 */
-		public DescribedPredicate<JavaClass> getIgnored() {
-			return ignored;
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * @see org.springframework.modulith.model.Modules.CacheKey#getMetadata()
-		 */
-		@Override
-		public ModulithMetadata getMetadata() {
-			return ModulithMetadata.of(basePackage);
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * @see java.lang.Object#equals(java.lang.Object)
-		 */
-		@Override
-		public boolean equals(Object obj) {
-
-			if (this == obj) {
-				return true;
-			}
-
-			if (!(obj instanceof PackageKey that)) {
-				return false;
-			}
-
-			return Objects.equals(this.basePackage, that.basePackage) //
-					&& Objects.equals(this.ignored, that.ignored);
-		}
-
-		/*
-		 * (non-Javadoc)
-		 * @see java.lang.Object#hashCode()
-		 */
-		@Override
-		public int hashCode() {
-			return Objects.hash(basePackage, ignored);
+			return Objects.hash(ignored, options, metadataSource);
 		}
 	}
 
@@ -773,21 +761,25 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 	 */
 	private static class TopologicalSorter {
 
+		@Nullable
 		private static List<String> topologicallySortModules(ApplicationModules modules) {
 
 			Graph<ApplicationModule, DefaultEdge> graph = new DefaultDirectedGraph<>(DefaultEdge.class);
 
-			modules.modules.forEach((__, project) -> {
+			modules.modules.values()
+					.stream()
+					.sorted()
+					.forEach(project -> {
 
-				graph.addVertex(project);
+						graph.addVertex(project);
 
-				project.getDependencies(modules).stream() //
-						.map(ApplicationModuleDependency::getTargetModule) //
-						.forEach(dependency -> {
-							graph.addVertex(dependency);
-							graph.addEdge(project, dependency);
-						});
-			});
+						project.getDependencies(modules).stream() //
+								.map(ApplicationModuleDependency::getTargetModule) //
+								.forEach(dependency -> {
+									graph.addVertex(dependency);
+									graph.addEdge(project, dependency);
+								});
+					});
 
 			var names = new ArrayList<String>();
 			var iterator = new TopologicalOrderIterator<>(graph);
@@ -798,7 +790,7 @@ public class ApplicationModules implements Iterable<ApplicationModule> {
 				return names;
 
 			} catch (IllegalArgumentException o_O) {
-				return modules.modules.values().stream().map(ApplicationModule::getName).toList();
+				return null;
 			}
 		}
 	}

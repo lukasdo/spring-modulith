@@ -10,11 +10,11 @@ jobs:
     strategy:
       matrix:
         version:
-        - '3.1.10'
-        - '3.1.11-SNAPSHOT'
-        - '3.2.4'
-        - '3.2.5-SNAPSHOT'
-        - '3.3.0-SNAPSHOT'
+        - '3.2.8'
+        - '3.2.10-SNAPSHOT'
+        - '3.3.3'
+        - '3.3.4-SNAPSHOT'
+        - '3.4.0-SNAPSHOT'
     name: Build against Boot ${{ matrix.version }}
     runs-on: ubuntu-latest
 
@@ -24,7 +24,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up JDK 17
-      uses: actions/setup-java@v3
+      uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: 17
@@ -32,10 +32,10 @@ jobs:
 
     - name: Build with Maven
       env:
-        GRADLE_ENTERPRISE_CACHE_USERNAME: ${{ secrets.GRADLE_ENTERPRISE_CACHE_USER }}
-        GRADLE_ENTERPRISE_CACHE_PASSWORD: ${{ secrets.GRADLE_ENTERPRISE_CACHE_PASSWORD }}
-        GRADLE_ENTERPRISE_ACCESS_KEY: ${{ secrets.GRADLE_ENTERPRISE_SECRET_ACCESS_KEY }}
+        COMMERCIAL_USERNAME: ${{ secrets.COMMERCIAL_ARTIFACTORY_RO_USERNAME }}
+        COMMERCIAL_PASSWORD: ${{ secrets.COMMERCIAL_ARTIFACTORY_RO_PASSWORD }}
+        DEVELOCITY_ACCESS_KEY: ${{ secrets.GRADLE_ENTERPRISE_SECRET_ACCESS_KEY }}
       run: |
         cd spring-modulith-examples
-        ../mvnw -B versions:update-parent -DskipResolution=true -DparentVersion=${{ matrix.version }}
-        ../mvnw -B clean verify -Pwith-preview-repos -Dspring-boot.version=${{ matrix.version }}
+        ../mvnw -B versions:update-parent -s ../settings.xml -Pspring-enterprise,with-preview-repos -DskipResolution=true -DparentVersion=${{ matrix.version }}
+        ../mvnw -B clean verify -s ../settings.xml -Pspring-enterprise,with-preview-repos -Dspring-boot.version=${{ matrix.version }}

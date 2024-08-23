@@ -83,6 +83,13 @@ class JpaEventPublicationRepository implements EventPublicationRepository {
 			   set p.completionDate = ?3
 			 where p.serializedEvent = ?1
 			   and p.listenerId = ?2
+			   and p.completionDate is null
+			""";
+
+	private static final String MARK_COMPLETED_BY_ID = """
+			update JpaEventPublication p
+			   set p.completionDate = ?2
+			 where p.id = ?1
 			""";
 
 	private static final String DELETE = """
@@ -150,6 +157,19 @@ class JpaEventPublicationRepository implements EventPublicationRepository {
 				.setParameter(1, serializeEvent(event))
 				.setParameter(2, identifier.getValue())
 				.setParameter(3, completionDate)
+				.executeUpdate();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.modulith.events.core.EventPublicationRepository#markCompleted(java.util.UUID, java.time.Instant)
+	 */
+	@Override
+	public void markCompleted(UUID identifier, Instant completionDate) {
+
+		entityManager.createQuery(MARK_COMPLETED_BY_ID)
+				.setParameter(1, identifier)
+				.setParameter(2, completionDate)
 				.executeUpdate();
 	}
 

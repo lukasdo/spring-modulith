@@ -18,12 +18,14 @@ package org.springframework.modulith.core;
 import static com.tngtech.archunit.base.DescribedPredicate.*;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.*;
 import static java.lang.System.*;
+import static java.util.Comparator.*;
 import static org.springframework.modulith.core.SyntacticSugar.*;
 import static org.springframework.modulith.core.Types.JavaXTypes.*;
 import static org.springframework.modulith.core.Types.SpringDataTypes.*;
 import static org.springframework.modulith.core.Types.SpringTypes.*;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +39,7 @@ import java.util.stream.Stream;
 import org.springframework.lang.Nullable;
 import org.springframework.modulith.core.Types.JMoleculesTypes;
 import org.springframework.modulith.core.Types.SpringTypes;
+import org.springframework.modulith.core.Violations.Violation;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 import org.springframework.util.function.SingletonSupplier;
@@ -56,12 +59,15 @@ import com.tngtech.archunit.core.domain.SourceCodeLocation;
  *
  * @author Oliver Drotbohm
  */
-public class ApplicationModule {
+public class ApplicationModule implements Comparable<ApplicationModule> {
 
 	/**
 	 * The base package of the {@link ApplicationModule}.
 	 */
 	private final JavaPackage basePackage;
+	private final Classes classes;
+	private final JavaPackages exclusions;
+
 	private final ApplicationModuleInformation information;
 
 	/**
@@ -69,7 +75,7 @@ public class ApplicationModule {
 	 * or implicitly.
 	 */
 	private final NamedInterfaces namedInterfaces;
-	private final boolean useFullyQualifiedModuleNames;
+	private final ApplicationModuleSource source;
 
 	private final Supplier<Classes> springBeans;
 	private final Supplier<Classes> aggregateRoots;
@@ -77,24 +83,38 @@ public class ApplicationModule {
 	private final Supplier<List<EventType>> publishedEvents;
 
 	/**
+	 * Creates a new {@link ApplicationModule} from the given {@link ApplicationModuleSource}.
+	 *
+	 * @param source must not be {@literal null}.
+	 */
+	ApplicationModule(ApplicationModuleSource source) {
+		this(source, JavaPackages.NONE);
+	}
+
+	/**
 	 * Creates a new {@link ApplicationModule} for the given base package and whether to use fully-qualified module names.
 	 *
-	 * @param basePackage must not be {@literal null}.
-	 * @param useFullyQualifiedModuleNames
+	 * @param source must not be {@literal null}.
+	 * @param exclusions must not be {@literal null}.
 	 */
-	ApplicationModule(JavaPackage basePackage, boolean useFullyQualifiedModuleNames) {
+	ApplicationModule(ApplicationModuleSource source, JavaPackages exclusions) {
 
-		Assert.notNull(basePackage, "Base package must not be null!");
+		Assert.notNull(source, "Base package must not be null!");
+		Assert.notNull(exclusions, "Exclusions must not be null!");
 
+		JavaPackage basePackage = source.moduleBasePackage();
+
+		this.source = source;
 		this.basePackage = basePackage;
+		this.exclusions = exclusions;
+		this.classes = basePackage.getClasses(exclusions);
 		this.information = ApplicationModuleInformation.of(basePackage);
 		this.namedInterfaces = isOpen()
 				? NamedInterfaces.forOpen(basePackage)
 				: NamedInterfaces.discoverNamedInterfaces(basePackage);
-		this.useFullyQualifiedModuleNames = useFullyQualifiedModuleNames;
 
-		this.springBeans = SingletonSupplier.of(() -> filterSpringBeans(basePackage));
-		this.aggregateRoots = SingletonSupplier.of(() -> findAggregateRoots(basePackage));
+		this.springBeans = SingletonSupplier.of(() -> filterSpringBeans(classes));
+		this.aggregateRoots = SingletonSupplier.of(() -> findAggregateRoots(classes));
 		this.valueTypes = SingletonSupplier
 				.of(() -> findArchitecturallyEvidentType(ArchitecturallyEvidentType::isValueObject));
 		this.publishedEvents = SingletonSupplier.of(() -> findPublishedEvents());
@@ -124,7 +144,7 @@ public class ApplicationModule {
 	 * @return will never be {@literal null} or empty.
 	 */
 	public String getName() {
-		return useFullyQualifiedModuleNames ? basePackage.getName() : basePackage.getLocalName();
+		return source.moduleName();
 	}
 
 	/**
@@ -273,10 +293,20 @@ public class ApplicationModule {
 						FormatableType.of(type).getAbbreviatedFullName(this), getName())));
 	}
 
+	/**
+	 * Returns whether the current module contains the given type.
+	 *
+	 * @param type must not be {@literal null}.
+	 */
 	public boolean contains(JavaClass type) {
-		return basePackage.contains(type);
+		return classes.contains(type);
 	}
 
+	/**
+	 * Returns whether the current module contains the given type.
+	 *
+	 * @param type can be {@literal null}.
+	 */
 	public boolean contains(@Nullable Class<?> type) {
 		return type != null && getType(type.getName()).isPresent();
 	}
@@ -291,7 +321,7 @@ public class ApplicationModule {
 
 		Assert.hasText(candidate, "Candidate must not be null or emtpy!");
 
-		return basePackage.stream()
+		return classes.stream()
 				.filter(hasSimpleOrFullyQualifiedName(candidate))
 				.findFirst();
 	}
@@ -362,8 +392,27 @@ public class ApplicationModule {
 
 		builder.append("\n");
 
+		if (modules != null) {
+			modules.getParentOf(this).ifPresent(it -> {
+				builder.append("> Parent module: ").append(it.getName()).append("\n");
+			});
+		}
+
 		builder.append("> Logical name: ").append(getName()).append('\n');
 		builder.append("> Base package: ").append(basePackage.getName()).append('\n');
+
+		builder.append("> Excluded packages: ");
+
+		if (!exclusions.iterator().hasNext()) {
+			builder.append("none").append('\n');
+		} else {
+
+			builder.append('\n');
+
+			exclusions.stream().forEach(it -> {
+				builder.append("  - ").append(it.getName()).append('\n');
+			});
+		}
 
 		if (namedInterfaces.hasExplicitInterfaces()) {
 
@@ -474,6 +523,23 @@ public class ApplicationModule {
 		return information.isOpen();
 	}
 
+	/**
+	 * Returns whether the given type is contained in any of the parent modules of the current one.
+	 *
+	 * @param type must not be {@literal null}.
+	 * @param modules must not be {@literal null}.
+	 * @since 1.3
+	 */
+	boolean containsTypeInAnyParent(JavaClass type, ApplicationModules modules) {
+
+		Assert.notNull(type, "Type must not be null!");
+		Assert.notNull(modules, "ApplicationModules must not be null!");
+
+		return modules.getParentOf(this)
+				.filter(it -> it.contains(type) || it.containsTypeInAnyParent(type, modules))
+				.isPresent();
+	}
+
 	/*
 	 * (non-Javadoc)
 	 * @see java.lang.Object#equals(java.lang.Object)
@@ -489,13 +555,13 @@ public class ApplicationModule {
 			return false;
 		}
 
-		return Objects.equals(this.basePackage, that.basePackage) //
+		return Objects.equals(this.source, that.source)
+				&& Objects.equals(this.basePackage, that.basePackage) //
 				&& Objects.equals(this.aggregateRoots, that.aggregateRoots) //
 				&& Objects.equals(this.information, that.information) //
 				&& Objects.equals(this.namedInterfaces, that.namedInterfaces) //
 				&& Objects.equals(this.publishedEvents, that.publishedEvents) //
 				&& Objects.equals(this.springBeans, that.springBeans) //
-				&& Objects.equals(this.useFullyQualifiedModuleNames, that.useFullyQualifiedModuleNames) //
 				&& Objects.equals(this.valueTypes, that.valueTypes);
 	}
 
@@ -505,8 +571,17 @@ public class ApplicationModule {
 	 */
 	@Override
 	public int hashCode() {
-		return Objects.hash(basePackage, aggregateRoots, information, namedInterfaces, publishedEvents, springBeans,
-				useFullyQualifiedModuleNames, valueTypes);
+		return Objects.hash(source, basePackage, aggregateRoots, information, namedInterfaces, publishedEvents, springBeans,
+				valueTypes);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Comparable#compareTo(java.lang.Object)
+	 */
+	@Override
+	public int compareTo(ApplicationModule o) {
+		return getBasePackage().compareTo(o.getBasePackage());
 	}
 
 	private List<EventType> findPublishedEvents() {
@@ -514,7 +589,7 @@ public class ApplicationModule {
 		DescribedPredicate<JavaClass> isEvent = implement(JMoleculesTypes.DOMAIN_EVENT) //
 				.or(isAnnotatedWith(JMoleculesTypes.AT_DOMAIN_EVENT));
 
-		return basePackage.that(isEvent).stream() //
+		return classes.that(isEvent).stream() //
 				.map(EventType::new).toList();
 	}
 
@@ -536,7 +611,7 @@ public class ApplicationModule {
 
 	private Stream<QualifiedDependency> getAllModuleDependencies(ApplicationModules modules) {
 
-		return basePackage.stream() //
+		return classes.stream() //
 				.flatMap(it -> getModuleDependenciesOf(it, modules));
 	}
 
@@ -589,7 +664,7 @@ public class ApplicationModule {
 		return modules.contains(dependency) && !contains(dependency);
 	}
 
-	private Classes findAggregateRoots(JavaPackage source) {
+	private Classes findAggregateRoots(Classes source) {
 
 		return source.stream() //
 				.map(it -> ArchitecturallyEvidentType.of(it, getSpringBeansInternal()))
@@ -598,7 +673,78 @@ public class ApplicationModule {
 				.collect(Classes.toClasses());
 	}
 
-	private static Classes filterSpringBeans(JavaPackage source) {
+	/**
+	 * Returns the current module's immediate parent module, if present.
+	 *
+	 * @param modules must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.3
+	 */
+	Optional<ApplicationModule> getParentModule(ApplicationModules modules) {
+
+		Assert.notNull(modules, "ApplicationModules must not be null!");
+
+		var byPackageDepth = comparing(ApplicationModule::getBasePackage, JavaPackage.reverse());
+
+		return modules.stream()
+				.filter(it -> basePackage.isSubPackageOf(it.getBasePackage()))
+				.sorted(byPackageDepth)
+				.findFirst();
+	}
+
+	/**
+	 * Returns the {@link ApplicationModule}s directly nested inside the current one.
+	 *
+	 * @param modules must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.3
+	 */
+	Collection<ApplicationModule> getDirectlyNestedModules(ApplicationModules modules) {
+
+		Assert.notNull(modules, "ApplicationModules must not be null!");
+
+		return doGetNestedModules(modules, false);
+	}
+
+	/**
+	 * Returns all of the current {@link ApplicationModule}'s nested {@link ApplicationModule}s including ones contained
+	 * in nested modules in turn.
+	 *
+	 * @param modules must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 * @since 1.3
+	 */
+	Collection<ApplicationModule> getNestedModules(ApplicationModules modules) {
+
+		Assert.notNull(modules, "ApplicationModules must not be null!");
+
+		return doGetNestedModules(modules, true);
+	}
+
+	/**
+	 * @return the classes
+	 */
+	Classes getClasses() {
+		return classes;
+	}
+
+	private String getQualifiedName(NamedInterface namedInterface) {
+		return namedInterface.getQualifiedName(getName());
+	}
+
+	private Collection<ApplicationModule> doGetNestedModules(ApplicationModules modules, boolean recursive) {
+
+		var result = modules.stream()
+				.filter(it -> it.getParentModule(modules).filter(this::equals).isPresent());
+
+		if (recursive) {
+			result = result.flatMap(it -> Stream.concat(Stream.of(it), it.getNestedModules(modules).stream()));
+		}
+
+		return result.toList();
+	}
+
+	private static Classes filterSpringBeans(Classes source) {
 
 		Map<Boolean, List<JavaClass>> collect = source.that(isConfiguration()).stream() //
 				.flatMap(it -> it.getMethods().stream()) //
@@ -627,7 +773,7 @@ public class ApplicationModule {
 
 		var springBeansInternal = getSpringBeansInternal();
 
-		return basePackage.stream()
+		return classes.stream()
 				.map(it -> ArchitecturallyEvidentType.of(it, springBeansInternal))
 				.filter(selector)
 				.map(ArchitecturallyEvidentType::getType)
@@ -638,20 +784,20 @@ public class ApplicationModule {
 
 		private static final String INVALID_EXPLICIT_MODULE_DEPENDENCY = "Invalid explicit module dependency in %s! No module found with name '%s'.";
 		private static final String INVALID_NAMED_INTERFACE_DECLARATION = "No named interface named '%s' found! Original dependency declaration: %s -> %s.";
+		private static final String WILDCARD = "*";
 
 		private final ApplicationModule target;
-		private final NamedInterface namedInterface;
+		private final @Nullable NamedInterface namedInterface;
 
 		/**
 		 * Creates a new {@link DeclaredDependency} for the given {@link ApplicationModule} and {@link NamedInterface}.
 		 *
 		 * @param target must not be {@literal null}.
-		 * @param namedInterface must not be {@literal null}.
+		 * @param namedInterface can be {@literal null}.
 		 */
-		private DeclaredDependency(ApplicationModule target, NamedInterface namedInterface) {
+		private DeclaredDependency(ApplicationModule target, @Nullable NamedInterface namedInterface) {
 
 			Assert.notNull(target, "Target ApplicationModule must not be null!");
-			Assert.notNull(namedInterface, "NamedInterface must not be null!");
 
 			this.target = target;
 			this.namedInterface = namedInterface;
@@ -676,17 +822,22 @@ public class ApplicationModule {
 
 			var segments = identifier.split("::");
 			var targetModuleName = segments[0].trim();
-			var namedInterfacename = segments.length > 1 ? segments[1].trim() : null;
+			var namedInterfaceName = segments.length > 1 ? segments[1].trim() : null;
 
 			var target = modules.getModuleByName(targetModuleName)
 					.orElseThrow(() -> new IllegalArgumentException(
 							INVALID_EXPLICIT_MODULE_DEPENDENCY.formatted(source.getName(), targetModuleName)));
 
-			var namedInterface = namedInterfacename == null
-					? target.getNamedInterfaces().getUnnamedInterface()
-					: target.getNamedInterfaces().getByName(segments[1])
+			if (WILDCARD.equals(namedInterfaceName)) {
+				return new DeclaredDependency(target, null);
+			}
+
+			var namedInterfaces = target.getNamedInterfaces();
+			var namedInterface = namedInterfaceName == null
+					? namedInterfaces.getUnnamedInterface()
+					: namedInterfaces.getByName(namedInterfaceName)
 							.orElseThrow(() -> new IllegalArgumentException(
-									INVALID_NAMED_INTERFACE_DECLARATION.formatted(namedInterfacename, source.getName(), identifier)));
+									INVALID_NAMED_INTERFACE_DECLARATION.formatted(namedInterfaceName, source.getName(), identifier)));
 
 			return new DeclaredDependency(target, namedInterface);
 		}
@@ -714,7 +865,9 @@ public class ApplicationModule {
 
 			Assert.notNull(type, "Type must not be null!");
 
-			return namedInterface.contains(type);
+			return namedInterface == null
+					? target.getNamedInterfaces().containsInExplicitInterface(type)
+					: namedInterface.contains(type);
 		}
 
 		/**
@@ -723,11 +876,13 @@ public class ApplicationModule {
 		 * @param type must not be {@literal null}.
 		 * @return
 		 */
-		public boolean contains(Class<?> type) {
+		boolean contains(Class<?> type) {
 
 			Assert.notNull(type, "Type must not be null!");
 
-			return namedInterface.contains(type);
+			return namedInterface == null
+					? target.getNamedInterfaces().containsInExplicitInterface(type)
+					: namedInterface.contains(type);
 		}
 
 		/*
@@ -736,7 +891,18 @@ public class ApplicationModule {
 		 */
 		@Override
 		public String toString() {
-			return namedInterface.isUnnamed() ? target.getName() : target.getName() + "::" + namedInterface.getName();
+
+			var result = target.getName();
+
+			if (namedInterface == null) {
+				return result + " :: " + WILDCARD;
+			}
+
+			if (namedInterface.isUnnamed()) {
+				return result;
+			}
+
+			return result + " :: " + namedInterface.getName();
 		}
 
 		/*
@@ -756,7 +922,6 @@ public class ApplicationModule {
 
 			return Objects.equals(this.target, that.target) //
 					&& Objects.equals(this.namedInterface, that.namedInterface);
-
 		}
 
 		/*
@@ -816,7 +981,7 @@ public class ApplicationModule {
 			return isAllowedDependency(it -> it.contains(type));
 		}
 
-		public boolean isAllowedDependency(Class<?> type) {
+		boolean isAllowedDependency(Class<?> type) {
 			return isAllowedDependency(it -> it.contains(type));
 		}
 
@@ -882,6 +1047,9 @@ public class ApplicationModule {
 	static class QualifiedDependency {
 
 		private static final List<String> INJECTION_TYPES = Arrays.asList(AT_AUTOWIRED, AT_RESOURCE, AT_INJECT);
+
+		private static final String INVALID_SUB_MODULE_REFERENCE = "Invalid sub-module reference from module '%s' to module '%s' (via %s -> %s)!";
+		private static final String INTERNAL_REFERENCE = "Module '%s' depends on non-exposed type %s within module '%s'!";
 
 		private final JavaClass source, target;
 		private final String description;
@@ -983,18 +1151,34 @@ public class ApplicationModule {
 
 			var originModule = getExistingModuleOf(source, modules);
 			var targetModule = getExistingModuleOf(target, modules);
+			var violations = Violations.NONE;
+
+			if (originModule.equals(targetModule)) {
+				return violations;
+			}
 
 			var declaredDependencies = originModule.getDeclaredDependencies(modules);
-			var violations = Violations.NONE;
 
 			// Check explicitly defined allowed targets
 			if (!declaredDependencies.isAllowedDependency(target)) {
 
-				var message = "Module '%s' depends on module '%s' via %s -> %s. Allowed targets: %s." //
-						.formatted(originModule.getName(), targetModule.getName(), source.getName(), target.getName(),
+				var targetNamedInterfaces = targetModule.getNamedInterfaces()
+						.getNamedInterfacesContaining(target)
+						.filter(NamedInterface::isNamed)
+						.toList();
+
+				var targetString = targetNamedInterfaces.isEmpty()
+						? "module '%s'".formatted(targetModule.getName())
+						: "named interface(s) '%s'".formatted(
+								targetNamedInterfaces.stream()
+										.map(targetModule::getQualifiedName)
+										.collect(Collectors.joining(", ")));
+
+				var message = "Module '%s' depends on %s via %s -> %s. Allowed targets: %s." //
+						.formatted(originModule.getName(), targetString, source.getName(), target.getName(),
 								declaredDependencies.toString());
 
-				return violations.and(new IllegalStateException(message));
+				return violations.and(new Violation(message));
 			}
 
 			// No explicitly allowed dependencies - check for general access
@@ -1003,15 +1187,32 @@ public class ApplicationModule {
 				return violations;
 			}
 
-			if (!targetModule.isExposed(target)) {
-
-				var violationText = "Module '%s' depends on non-exposed type %s within module '%s'!"
-						.formatted(originModule.getName(), target.getName(), targetModule.getName());
-
-				return violations.and(new IllegalStateException(violationText + lineSeparator() + description));
+			if (originModule.containsTypeInAnyParent(target, modules)) {
+				return violations;
 			}
 
-			return violations;
+			if (!targetModule.isExposed(target)) {
+
+				var violationText = INTERNAL_REFERENCE
+						.formatted(originModule.getName(), target.getName(), targetModule.getName());
+
+				return violations.and(new Violation(violationText + lineSeparator() + description));
+			}
+
+			// Parent child relationships
+
+			return targetModule.getParentModule(modules)
+					.filter(it -> !it.equals(originModule))
+					.map(__ -> {
+
+						var violationText = INVALID_SUB_MODULE_REFERENCE
+								.formatted(originModule.getName(), targetModule.getName(),
+										FormatableType.of(source).getAbbreviatedFullName(originModule),
+										FormatableType.of(target).getAbbreviatedFullName(targetModule));
+
+						return violations.and(new Violation(violationText));
+					})
+					.orElse(violations);
 		}
 
 		ApplicationModule getExistingModuleOf(JavaClass javaClass, ApplicationModules modules) {
@@ -1184,7 +1385,7 @@ public class ApplicationModule {
 
 				ApplicationModule module = getExistingModuleOf(source.getOwner(), modules);
 
-				violations = violations.and(new IllegalStateException(
+				violations = violations.and(new Violation(
 						String.format("Module %s uses field injection in %s. Prefer constructor injection instead!",
 								module.getDisplayName(), source.getFullName())));
 			}
