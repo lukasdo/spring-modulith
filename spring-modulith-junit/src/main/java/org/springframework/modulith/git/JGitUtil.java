@@ -14,7 +14,7 @@ import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
-import org.springframework.modulith.FileChange;
+import org.springframework.modulith.ModifiedFilePath;
 
 /**
  * Utility to contain re-used JGit operations. For internal use only.
@@ -23,9 +23,9 @@ final class JGitUtil {
 	private JGitUtil() {
 	}
 
-	static Stream<FileChange> convertDiffEntriesToFileChanges(Stream<DiffEntry> diffEntries) {
+	static Stream<ModifiedFilePath> convertDiffEntriesToFileChanges(Stream<DiffEntry> diffEntries) {
 		return diffEntries.flatMap(
-				entry -> Stream.of(new FileChange(entry.getNewPath()), new FileChange(entry.getOldPath())))
+				entry -> Stream.of(new ModifiedFilePath(entry.getNewPath()), new ModifiedFilePath(entry.getOldPath())))
 			.filter(change -> !change.path().equals("/dev/null"));
 	}
 

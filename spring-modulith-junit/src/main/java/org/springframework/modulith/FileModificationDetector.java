@@ -6,11 +6,11 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.springframework.core.env.PropertyResolver;
 import org.springframework.lang.NonNull;
 
-public interface FileChangeDetector {
+public interface FileModificationDetector {
 
 	String CLASS_FILE_SUFFIX = ".java";
 	String PACKAGE_PREFIX = "src.main.java";
 
-	Set<FileChange> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException, GitAPIException;
+	Set<ModifiedFilePath> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException, GitAPIException;
 
 }

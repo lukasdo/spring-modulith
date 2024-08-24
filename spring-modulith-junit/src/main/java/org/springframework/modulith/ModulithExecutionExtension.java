@@ -22,8 +22,8 @@ import java.util.ServiceLoader;
 import java.util.ServiceLoader.Provider;
 import java.util.Set;
 
-import static org.springframework.modulith.FileChangeDetector.CLASS_FILE_SUFFIX;
-import static org.springframework.modulith.FileChangeDetector.PACKAGE_PREFIX;
+import static org.springframework.modulith.FileModificationDetector.CLASS_FILE_SUFFIX;
+import static org.springframework.modulith.FileModificationDetector.PACKAGE_PREFIX;
 import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
 
 // add logging to explain what happens (and why)
@@ -72,7 +72,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         if (testClass.isPresent()) {
             Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
-            if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main cl    ass
+            if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
                 return ConditionEvaluationResult.enabled(
                     "ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
             }
@@ -102,11 +102,11 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> changedClasses = new HashSet<>();
             try {
-                Set<FileChange> modifiedFiles = strategy.getModifiedFiles(applicationContext.getEnvironment());
+                Set<ModifiedFilePath> modifiedFiles = strategy.getModifiedFiles(applicationContext.getEnvironment());
 
                 Set<String> changedClassNames = modifiedFiles.stream()
 
-                        .map(FileChange::path)
+                        .map(ModifiedFilePath::path)
                         .map(ClassUtils::convertResourcePathToClassName)
                         .filter(path -> path.contains(PACKAGE_PREFIX)) // DELETED will be filtered as new path will be /dev/null
                         .filter(path -> path.endsWith(CLASS_FILE_SUFFIX))
@@ -131,11 +131,11 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         });
     }
 
-    private FileChangeDetector loadGitProviderStrategy(ApplicationContext applicationContext) {
+    private FileModificationDetector loadGitProviderStrategy(ApplicationContext applicationContext) {
         var property = applicationContext.getEnvironment()
             .getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
 
-        FileChangeDetector strategy = ServiceLoader.load(FileChangeDetector.class)
+        FileModificationDetector strategy = ServiceLoader.load(FileModificationDetector.class)
             .stream()
             .filter(strategyProvider -> strategyProvider.type().getName().equals(property))
             .findFirst()

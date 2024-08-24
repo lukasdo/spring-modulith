@@ -9,8 +9,8 @@ import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.lib.BranchConfig;
 import org.springframework.core.env.PropertyResolver;
 import org.springframework.lang.NonNull;
-import org.springframework.modulith.FileChange;
-import org.springframework.modulith.FileChangeDetector;
+import org.springframework.modulith.ModifiedFilePath;
+import org.springframework.modulith.FileModificationDetector;
 
 /**
  * <p>Find all changes that have not been pushed to the remote branch yet.
@@ -18,17 +18,17 @@ import org.springframework.modulith.FileChangeDetector;
  * untracked changes.
  * <em>Note:</em> This will not fetch from the remote first!
  */
-public class UnpushedGitChangesDetector implements FileChangeDetector {
+public class UnpushedGitChangesDetector implements FileModificationDetector {
 
 	@Override
-	public @NonNull Set<FileChange> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException {
+	public @NonNull Set<ModifiedFilePath> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException {
 		try (var repo = JGitUtil.buildRepository()) {
 			String localBranch = repo.getFullBranch();
 			String trackingBranch = new BranchConfig(repo.getConfig(), repo.getBranch()).getTrackingBranch();
 
 			Stream<DiffEntry> diff = JGitUtil.diffRefs(repo, localBranch, trackingBranch);
 
-			HashSet<FileChange> result = new HashSet<>();
+			HashSet<ModifiedFilePath> result = new HashSet<>();
 			result.addAll(new UncommittedChangesDetector().getModifiedFiles(propertyResolver));
 			result.addAll(JGitUtil.convertDiffEntriesToFileChanges(diff).collect(Collectors.toSet()));
 			return result;

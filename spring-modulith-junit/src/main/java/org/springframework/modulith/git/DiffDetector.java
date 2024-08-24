@@ -11,18 +11,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.PropertyResolver;
 import org.springframework.lang.NonNull;
-import org.springframework.modulith.FileChange;
-import org.springframework.modulith.FileChangeDetector;
+import org.springframework.modulith.ModifiedFilePath;
+import org.springframework.modulith.FileModificationDetector;
 
 /**
  * Implementation to get changes between HEAD and a complete or abbreviated SHA-1 or other revision, like
  * <code>HEAD~2</code>. See {@link org.eclipse.jgit.lib.Repository#resolve(String)} for more information.
  */
-public class DiffDetector implements FileChangeDetector {
+public class DiffDetector implements FileModificationDetector {
 	private static final Logger log = LoggerFactory.getLogger(DiffDetector.class);
 
 	@Override
-	public @NonNull Set<FileChange> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException {
+	public @NonNull Set<ModifiedFilePath> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException {
 		String commitIdToCompareTo = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
 
 		try (var repo = JGitUtil.buildRepository()) {
