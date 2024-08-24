@@ -7,7 +7,8 @@ import java.util.stream.Stream;
 import org.eclipse.jgit.diff.DiffEntry;
 
 final class JGitSupport {
-	private JGitSupport() {}
+	private JGitSupport() {
+	}
 
 	static Set<FileChange> convertDiffEntriesToFileChanges(Collection<DiffEntry> diffEntries) {
 		return diffEntries.stream()
