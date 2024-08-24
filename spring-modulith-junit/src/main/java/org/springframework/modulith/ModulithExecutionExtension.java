@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.AnnotatedClassFinder;
 import org.springframework.context.ApplicationContext;
 import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.git.UncommittedChangesDetector;
 import org.springframework.util.ClassUtils;
 
 import java.io.IOException;
@@ -21,10 +22,11 @@ import java.util.ServiceLoader;
 import java.util.ServiceLoader.Provider;
 import java.util.Set;
 
-import static org.springframework.modulith.GitProviderStrategy.CLASS_FILE_SUFFIX;
-import static org.springframework.modulith.GitProviderStrategy.PACKAGE_PREFIX;
+import static org.springframework.modulith.FileChangeDetector.CLASS_FILE_SUFFIX;
+import static org.springframework.modulith.FileChangeDetector.PACKAGE_PREFIX;
 import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
 
+// add logging to explain what happens (and why)
 
 /**
  * Junit Extension to skip test execution if no changes happened in the module that the test belongs to.
@@ -45,6 +47,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         }
 
         ApplicationContext applicationContext = getApplicationContext(context);
+        // if there is no applicationContext present, this is probably a unit test -> always execute those, for now
 
         this.writeChangedFilesToStore(context, applicationContext);
 
@@ -59,6 +62,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         Set<Class<?>> modifiedFiles = (Set<Class<?>>) store.get(PROJECT_ID, Set.class);
         if (modifiedFiles.isEmpty()) {
             log.trace("No files changed not running tests");
+            // We should run all tests when no files are changed. Caching should be done by the build tool, it is out of scope for this library
             return ConditionEvaluationResult.disabled("ModulithExecutionExtension: No changes detected");
         }
 
@@ -68,7 +72,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         if (testClass.isPresent()) {
             Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
-            if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
+            if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main cl    ass
                 return ConditionEvaluationResult.enabled(
                     "ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
             }
@@ -76,6 +80,8 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
             String packageName = ClassUtils.getPackageName(testClass.get());
             boolean isModule = applicationModules.getModuleForPackage(packageName).isPresent();
+
+            // always run test if one of whitelisted files is modified (ant matching)
 
             if (isModule) {// equals or prefix with a .
                 boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(packageName));
@@ -125,16 +131,16 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         });
     }
 
-    private GitProviderStrategy loadGitProviderStrategy(ApplicationContext applicationContext) {
+    private FileChangeDetector loadGitProviderStrategy(ApplicationContext applicationContext) {
         var property = applicationContext.getEnvironment()
             .getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
 
-        GitProviderStrategy strategy = ServiceLoader.load(GitProviderStrategy.class)
+        FileChangeDetector strategy = ServiceLoader.load(FileChangeDetector.class)
             .stream()
             .filter(strategyProvider -> strategyProvider.type().getName().equals(property))
             .findFirst()
             .map(Provider::get)
-            .orElseGet(UncommittedChangesStrategy::new);
+            .orElseGet(UncommittedChangesDetector::new);
 
         log.info("Strategy for finding changed files is '{}'", strategy.getClass().getName());
 
