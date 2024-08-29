@@ -1,30 +1,32 @@
 package org.springframework.modulith;
 
-import java.util.stream.Collectors;
-
-import org.eclipse.jgit.api.errors.GitAPIException;
-import org.junit.jupiter.api.extension.ConditionEvaluationResult;
-import org.junit.jupiter.api.extension.ExecutionCondition;
-import org.junit.jupiter.api.extension.ExtensionContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.AnnotatedClassFinder;
-import org.springframework.context.ApplicationContext;
-import org.springframework.modulith.core.ApplicationModules;
-import org.springframework.modulith.git.UncommittedChangesDetector;
-import org.springframework.util.ClassUtils;
+import static org.springframework.modulith.FileModificationDetector.CLASS_FILE_SUFFIX;
+import static org.springframework.modulith.FileModificationDetector.PACKAGE_PREFIX;
 
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Optional;
-import java.util.ServiceLoader;
-import java.util.ServiceLoader.Provider;
 import java.util.Set;
-
-import static org.springframework.modulith.FileModificationDetector.CLASS_FILE_SUFFIX;
-import static org.springframework.modulith.FileModificationDetector.PACKAGE_PREFIX;
-import static org.springframework.test.context.junit.jupiter.SpringExtension.getApplicationContext;
+import java.util.stream.Collectors;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.junit.jupiter.api.extension.ConditionEvaluationResult;
+import org.junit.jupiter.api.extension.ExecutionCondition;
+import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.jupiter.api.extension.ExtensionContext.Namespace;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
+import org.springframework.boot.test.context.AnnotatedClassFinder;
+import org.springframework.core.env.PropertyResolver;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.lang.NonNull;
+import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.git.DiffDetector;
+import org.springframework.modulith.git.UnpushedGitChangesDetector;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.StringUtils;
 
 // add logging to explain what happens (and why)
 
@@ -45,13 +47,9 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         if (context.getTestMethod().isPresent()) { // Is there something similar like @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
             return ConditionEvaluationResult.enabled("Enabled, only evaluating per class");
         }
-
-        ApplicationContext applicationContext = getApplicationContext(context);
-        // if there is no applicationContext present, this is probably a unit test -> always execute those, for now
-
-        this.writeChangedFilesToStore(context, applicationContext);
-
-        ExtensionContext.Store store = context.getStore(ExtensionContext.Namespace.GLOBAL);
+// if there is no applicationContext present, this is probably a unit test -> always execute those, for now
+        ExtensionContext.Store store = context.getRoot().getStore(Namespace.create(ModulithExecutionExtension.class));
+        this.writeChangedFilesToStore(store);
         Exception e = store.get(PROJECT_ERROR, Exception.class);
         if (e != null) {
             log.error("ModulithExecutionExtension: Error while evaluating test execution", e);
@@ -95,20 +93,23 @@ public class ModulithExecutionExtension implements ExecutionCondition {
     }
 
 
-    public void writeChangedFilesToStore(ExtensionContext context, ApplicationContext applicationContext) {
-        var strategy = loadGitProviderStrategy(applicationContext);
+    public void writeChangedFilesToStore(ExtensionContext.Store store) {
 
-        ExtensionContext.Store store = context.getRoot().getStore(ExtensionContext.Namespace.GLOBAL);
+		var environment = new StandardEnvironment();
+		ConfigDataEnvironmentPostProcessor.applyTo(environment);
+
+        var strategy = loadGitProviderStrategy(environment);
+
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> changedClasses = new HashSet<>();
             try {
-                Set<ModifiedFilePath> modifiedFiles = strategy.getModifiedFiles(applicationContext.getEnvironment());
+                Set<ModifiedFilePath> modifiedFiles = strategy.getModifiedFiles(environment);
 
                 Set<String> changedClassNames = modifiedFiles.stream()
 
                         .map(ModifiedFilePath::path)
                         .map(ClassUtils::convertResourcePathToClassName)
-                        .filter(path -> path.contains(PACKAGE_PREFIX)) // DELETED will be filtered as new path will be /dev/null
+                        .filter(path -> path.contains(PACKAGE_PREFIX))
                         .filter(path -> path.endsWith(CLASS_FILE_SUFFIX))
                         .map(path -> path.substring(path.lastIndexOf(PACKAGE_PREFIX) + PACKAGE_PREFIX.length() + 1,
                                 path.length() - CLASS_FILE_SUFFIX.length()))
@@ -131,20 +132,28 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         });
     }
 
-    private FileModificationDetector loadGitProviderStrategy(ApplicationContext applicationContext) {
-        var property = applicationContext.getEnvironment()
-            .getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
+    private FileModificationDetector loadGitProviderStrategy(@NonNull PropertyResolver propertyResolver) {
+        var property = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
+        var referenceCommit = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
 
-        FileModificationDetector strategy = ServiceLoader.load(FileModificationDetector.class)
-            .stream()
-            .filter(strategyProvider -> strategyProvider.type().getName().equals(property))
-            .findFirst()
-            .map(Provider::get)
-            .orElseGet(UncommittedChangesDetector::new);
+		if(StringUtils.hasText(property)) {
+			try {
 
-        log.info("Strategy for finding changed files is '{}'", strategy.getClass().getName());
+				var strategyType = ClassUtils.forName(property, ModulithExecutionExtension.class.getClassLoader());
+        		log.info("Strategy for finding changed files is '{}'", strategyType.getName());
+				return BeanUtils.instantiateClass(strategyType, FileModificationDetector.class);
 
-        return strategy;
-    }
+			} catch (ClassNotFoundException | LinkageError o_O) {
+				throw new IllegalStateException(o_O);
+			}
+		}
+		if(StringUtils.hasText(referenceCommit)) {
+        	log.info("Strategy for finding changed files is '{}'", DiffDetector.class.getName());
+			return new DiffDetector();
+		}
+
+        log.info("Strategy for finding changed files is '{}'", UnpushedGitChangesDetector.class.getName());
+		return new UnpushedGitChangesDetector();
+	}
 
 }
