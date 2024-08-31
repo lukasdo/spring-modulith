@@ -22,6 +22,7 @@ import org.springframework.boot.test.context.AnnotatedClassFinder;
 import org.springframework.core.env.PropertyResolver;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.lang.NonNull;
+import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.modulith.git.DiffDetector;
 import org.springframework.modulith.git.UnpushedGitChangesDetector;
@@ -33,7 +34,7 @@ import org.springframework.util.StringUtils;
 /**
  * Junit Extension to skip test execution if no changes happened in the module that the test belongs to.
  *
- * @author Lukas Dohmen
+ * @author Lukas Dohmen, David Bilge
  */
 public class ModulithExecutionExtension implements ExecutionCondition {
     public static final String CONFIG_PROPERTY_PREFIX = "spring.modulith.test";
@@ -59,9 +60,8 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         Set<Class<?>> modifiedFiles = (Set<Class<?>>) store.get(PROJECT_ID, Set.class);
         if (modifiedFiles.isEmpty()) {
-            log.trace("No files changed not running tests");
-            // We should run all tests when no files are changed. Caching should be done by the build tool, it is out of scope for this library
-            return ConditionEvaluationResult.disabled("ModulithExecutionExtension: No changes detected");
+            log.trace("No files changed, running tests");
+            return ConditionEvaluationResult.enabled("ModulithExecutionExtension: No changes detected");
         }
 
         log.trace("Found following changed files {}", modifiedFiles);
@@ -71,21 +71,23 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
             if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
-                return ConditionEvaluationResult.enabled(
+				return ConditionEvaluationResult.enabled(
                     "ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
             }
             ApplicationModules applicationModules = ApplicationModules.of(mainClass);
 
             String packageName = ClassUtils.getPackageName(testClass.get());
-            boolean isModule = applicationModules.getModuleForPackage(packageName).isPresent();
 
             // always run test if one of whitelisted files is modified (ant matching)
 
-            if (isModule) {// equals or prefix with a .
-                boolean hasChanges = modifiedFiles.stream().map(Class::getPackageName).anyMatch(s -> s.equals(packageName));
-                if (hasChanges) {
-                    return ConditionEvaluationResult.enabled("ModulithExecutionExtension: No changes in module");
-                }
+			Optional<ApplicationModule> optionalApplicationModule = applicationModules.getModuleForPackage(packageName);
+			if (optionalApplicationModule.isPresent()) {
+
+				for (Class<?> modifiedFile : modifiedFiles) {
+					if (optionalApplicationModule.get().contains(modifiedFile)) {
+						return ConditionEvaluationResult.enabled("ModulithExecutionExtension: Changes in module detected, Executing tests");
+					}
+				}
             }
         }
 
