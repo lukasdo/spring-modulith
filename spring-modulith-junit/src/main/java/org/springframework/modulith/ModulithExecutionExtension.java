@@ -1,13 +1,6 @@
 package org.springframework.modulith;
 
-import static org.springframework.modulith.FileModificationDetector.CLASS_FILE_SUFFIX;
-import static org.springframework.modulith.FileModificationDetector.PACKAGE_PREFIX;
-
-import java.io.IOException;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
+import com.tngtech.archunit.core.domain.JavaClass;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
@@ -23,11 +16,21 @@ import org.springframework.core.env.PropertyResolver;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.lang.NonNull;
 import org.springframework.modulith.core.ApplicationModule;
+import org.springframework.modulith.core.ApplicationModuleDependency;
 import org.springframework.modulith.core.ApplicationModules;
 import org.springframework.modulith.git.DiffDetector;
 import org.springframework.modulith.git.UnpushedGitChangesDetector;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
+
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import static org.springframework.modulith.FileModificationDetector.CLASS_FILE_SUFFIX;
+import static org.springframework.modulith.FileModificationDetector.PACKAGE_PREFIX;
 
 // add logging to explain what happens (and why)
 
@@ -45,10 +48,11 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
-        if (context.getTestMethod().isPresent()) { // Is there something similar like @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
+        if (context.getTestMethod().isPresent()) {
+            // Is there something similar liken @TestInstance(TestInstance.Lifecycle.PER_CLASS) for Extensions?
             return ConditionEvaluationResult.enabled("Enabled, only evaluating per class");
         }
-// if there is no applicationContext present, this is probably a unit test -> always execute those, for now
+
         ExtensionContext.Store store = context.getRoot().getStore(Namespace.create(ModulithExecutionExtension.class));
         this.writeChangedFilesToStore(store);
         Exception e = store.get(PROJECT_ERROR, Exception.class);
@@ -71,7 +75,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
             if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
-				return ConditionEvaluationResult.enabled(
+                return ConditionEvaluationResult.enabled(
                     "ModulithExecutionExtension: Unable to locate SpringBootApplication Class");
             }
             ApplicationModules applicationModules = ApplicationModules.of(mainClass);
@@ -79,26 +83,36 @@ public class ModulithExecutionExtension implements ExecutionCondition {
             String packageName = ClassUtils.getPackageName(testClass.get());
 
             // always run test if one of whitelisted files is modified (ant matching)
+            Optional<ApplicationModule> optionalApplicationModule = applicationModules.getModuleForPackage(packageName);
+            if (optionalApplicationModule.isPresent()) {
 
-			Optional<ApplicationModule> optionalApplicationModule = applicationModules.getModuleForPackage(packageName);
-			if (optionalApplicationModule.isPresent()) {
+                Set<JavaClass> dependentClasses = getAllDependentClasses(optionalApplicationModule.get(),
+                    applicationModules);
 
-				for (Class<?> modifiedFile : modifiedFiles) {
-					if (optionalApplicationModule.get().contains(modifiedFile)) {
-						return ConditionEvaluationResult.enabled("ModulithExecutionExtension: Changes in module detected, Executing tests");
-					}
-				}
+                for (Class<?> modifiedFile : modifiedFiles) {
+
+                    if (optionalApplicationModule.get().contains(modifiedFile)) {
+                        return ConditionEvaluationResult.enabled(
+                            "ModulithExecutionExtension: Changes in module detected, Executing tests");
+                    }
+
+                    if (dependentClasses.stream()
+                        .anyMatch(applicationModule -> applicationModule.isEquivalentTo(modifiedFile))) {
+                        return ConditionEvaluationResult.enabled(
+                            "ModulithExecutionExtension: Changes in dependent module detected, Executing tests");
+                    }
+                }
             }
         }
 
-        return ConditionEvaluationResult.disabled("ModulithExtension: No Changes detected in current module, executing tests");
+        return ConditionEvaluationResult.disabled(
+            "ModulithExtension: No Changes detected in current module, executing tests");
     }
-
 
     public void writeChangedFilesToStore(ExtensionContext.Store store) {
 
-		var environment = new StandardEnvironment();
-		ConfigDataEnvironmentPostProcessor.applyTo(environment);
+        var environment = new StandardEnvironment();
+        ConfigDataEnvironmentPostProcessor.applyTo(environment);
 
         var strategy = loadGitProviderStrategy(environment);
 
@@ -108,14 +122,13 @@ public class ModulithExecutionExtension implements ExecutionCondition {
                 Set<ModifiedFilePath> modifiedFiles = strategy.getModifiedFiles(environment);
 
                 Set<String> changedClassNames = modifiedFiles.stream()
-
-                        .map(ModifiedFilePath::path)
-                        .map(ClassUtils::convertResourcePathToClassName)
-                        .filter(path -> path.contains(PACKAGE_PREFIX))
-                        .filter(path -> path.endsWith(CLASS_FILE_SUFFIX))
-                        .map(path -> path.substring(path.lastIndexOf(PACKAGE_PREFIX) + PACKAGE_PREFIX.length() + 1,
-                                path.length() - CLASS_FILE_SUFFIX.length()))
-                        .collect(Collectors.toSet());
+                    .map(ModifiedFilePath::path)
+                    .map(ClassUtils::convertResourcePathToClassName)
+                    .filter(path -> path.contains(PACKAGE_PREFIX))
+                    .filter(path -> path.endsWith(CLASS_FILE_SUFFIX))
+                    .map(path -> path.substring(path.lastIndexOf(PACKAGE_PREFIX) + PACKAGE_PREFIX.length() + 1,
+                        path.length() - CLASS_FILE_SUFFIX.length()))
+                    .collect(Collectors.toSet());
 
                 for (String className : changedClassNames) {
                     try {
@@ -138,24 +151,53 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         var property = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
         var referenceCommit = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
 
-		if(StringUtils.hasText(property)) {
-			try {
+        if (StringUtils.hasText(property)) {
+            try {
 
-				var strategyType = ClassUtils.forName(property, ModulithExecutionExtension.class.getClassLoader());
-        		log.info("Strategy for finding changed files is '{}'", strategyType.getName());
-				return BeanUtils.instantiateClass(strategyType, FileModificationDetector.class);
+                var strategyType = ClassUtils.forName(property, ModulithExecutionExtension.class.getClassLoader());
+                log.info("Strategy for finding changed files is '{}'", strategyType.getName());
+                return BeanUtils.instantiateClass(strategyType, FileModificationDetector.class);
 
-			} catch (ClassNotFoundException | LinkageError o_O) {
-				throw new IllegalStateException(o_O);
-			}
-		}
-		if(StringUtils.hasText(referenceCommit)) {
-        	log.info("Strategy for finding changed files is '{}'", DiffDetector.class.getName());
-			return new DiffDetector();
-		}
+            } catch (ClassNotFoundException | LinkageError o_O) {
+                throw new IllegalStateException(o_O);
+            }
+        }
+        if (StringUtils.hasText(referenceCommit)) {
+            log.info("Strategy for finding changed files is '{}'", DiffDetector.class.getName());
+            return new DiffDetector();
+        }
 
         log.info("Strategy for finding changed files is '{}'", UnpushedGitChangesDetector.class.getName());
-		return new UnpushedGitChangesDetector();
-	}
+        return new UnpushedGitChangesDetector();
+    }
+
+    private Set<JavaClass> getAllDependentClasses(ApplicationModule applicationModule,
+        ApplicationModules applicationModules) {
+
+        Set<ApplicationModule> dependentModules = Set.of(applicationModule);
+        this.getDependentModules(applicationModule, applicationModules, dependentModules);
+
+        return dependentModules.stream()
+            .map(appModule -> appModule.getDependencies(applicationModules))
+            .flatMap(applicationModuleDependencies -> applicationModuleDependencies.stream()
+                .map(ApplicationModuleDependency::getTargetType))
+            .collect(Collectors.toSet());
+    }
+
+    private void getDependentModules(ApplicationModule applicationModule, ApplicationModules applicationModules,
+        Set<ApplicationModule> modules) {
+
+        Set<ApplicationModule> applicationModuleDependencies = applicationModule.getDependencies(applicationModules)
+            .stream()
+            .map(ApplicationModuleDependency::getTargetModule)
+            .collect(Collectors.toSet());
+
+        modules.addAll(applicationModuleDependencies);
+        if (!applicationModuleDependencies.isEmpty()) {
+            for (ApplicationModule applicationModuleDependency : applicationModuleDependencies) {
+                this.getDependentModules(applicationModuleDependency, applicationModules, modules);
+            }
+        }
+    }
 
 }
