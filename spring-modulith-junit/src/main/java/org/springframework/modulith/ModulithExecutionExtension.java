@@ -8,20 +8,14 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.ExtensionContext.Namespace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.BeanUtils;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
 import org.springframework.boot.test.context.AnnotatedClassFinder;
-import org.springframework.core.env.PropertyResolver;
 import org.springframework.core.env.StandardEnvironment;
-import org.springframework.lang.NonNull;
 import org.springframework.modulith.core.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModuleDependency;
 import org.springframework.modulith.core.ApplicationModules;
-import org.springframework.modulith.git.DiffDetector;
-import org.springframework.modulith.git.UnpushedGitChangesDetector;
 import org.springframework.util.ClassUtils;
-import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -114,7 +108,7 @@ public class ModulithExecutionExtension implements ExecutionCondition {
         var environment = new StandardEnvironment();
         ConfigDataEnvironmentPostProcessor.applyTo(environment);
 
-        var strategy = loadGitProviderStrategy(environment);
+        var strategy = FileModificationDetector.loadFileModificationDetector(environment);
 
         store.getOrComputeIfAbsent(PROJECT_ID, s -> {
             Set<Class<?>> changedClasses = new HashSet<>();
@@ -145,30 +139,6 @@ public class ModulithExecutionExtension implements ExecutionCondition {
                 return changedClasses;
             }
         });
-    }
-
-    private FileModificationDetector loadGitProviderStrategy(@NonNull PropertyResolver propertyResolver) {
-        var property = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".changed-files-strategy");
-        var referenceCommit = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
-
-        if (StringUtils.hasText(property)) {
-            try {
-
-                var strategyType = ClassUtils.forName(property, ModulithExecutionExtension.class.getClassLoader());
-                log.info("Strategy for finding changed files is '{}'", strategyType.getName());
-                return BeanUtils.instantiateClass(strategyType, FileModificationDetector.class);
-
-            } catch (ClassNotFoundException | LinkageError o_O) {
-                throw new IllegalStateException(o_O);
-            }
-        }
-        if (StringUtils.hasText(referenceCommit)) {
-            log.info("Strategy for finding changed files is '{}'", DiffDetector.class.getName());
-            return new DiffDetector();
-        }
-
-        log.info("Strategy for finding changed files is '{}'", UnpushedGitChangesDetector.class.getName());
-        return new UnpushedGitChangesDetector();
     }
 
     private Set<JavaClass> getAllDependentClasses(ApplicationModule applicationModule,

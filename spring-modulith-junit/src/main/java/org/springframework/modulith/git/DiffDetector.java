@@ -23,7 +23,7 @@ public class DiffDetector implements FileModificationDetector {
 
 	@Override
 	public @NonNull Set<ModifiedFilePath> getModifiedFiles(@NonNull PropertyResolver propertyResolver) throws IOException {
-		String commitIdToCompareTo = propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
+		String commitIdToCompareTo = getReferenceCommitProperty(propertyResolver);
 
 		try (var repo = JGitUtil.buildRepository()) {
 			String compareTo;
@@ -40,5 +40,9 @@ public class DiffDetector implements FileModificationDetector {
 
 			return JGitUtil.convertDiffEntriesToFileChanges(diffs).collect(Collectors.toSet());
 		}
+	}
+
+	public static String getReferenceCommitProperty(PropertyResolver propertyResolver) {
+		return propertyResolver.getProperty(CONFIG_PROPERTY_PREFIX + ".reference-commit");
 	}
 }
