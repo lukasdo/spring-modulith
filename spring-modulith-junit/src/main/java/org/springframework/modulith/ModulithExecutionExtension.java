@@ -144,7 +144,8 @@ public class ModulithExecutionExtension implements ExecutionCondition {
     private Set<JavaClass> getAllDependentClasses(ApplicationModule applicationModule,
         ApplicationModules applicationModules) {
 
-        Set<ApplicationModule> dependentModules = Set.of(applicationModule);
+        Set<ApplicationModule> dependentModules = new HashSet<>();
+        dependentModules.add(applicationModule);
         this.getDependentModules(applicationModule, applicationModules, dependentModules);
 
         return dependentModules.stream()
