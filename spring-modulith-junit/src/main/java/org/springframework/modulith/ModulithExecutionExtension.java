@@ -25,10 +25,9 @@ import org.springframework.util.ClassUtils;
  * @author Lukas Dohmen, David Bilge
  */
 public class ModulithExecutionExtension implements ExecutionCondition {
-    private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
-
     public static final String CONFIG_PROPERTY_PREFIX = "spring.modulith.test";
     final AnnotatedClassFinder spaClassFinder = new AnnotatedClassFinder(SpringBootApplication.class);
+    private static final Logger log = LoggerFactory.getLogger(ModulithExecutionExtension.class);
 
     @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
@@ -48,6 +47,9 @@ public class ModulithExecutionExtension implements ExecutionCondition {
 
         Optional<Class<?>> testClass = context.getTestClass();
         if (testClass.isPresent()) {
+            if (changedClasses.contains(testClass.get())) {
+                return ConditionEvaluationResult.enabled("ModulithExecutionExtension: Change in test class detected");
+            }
             Class<?> mainClass = this.spaClassFinder.findFromClass(testClass.get());
 
             if (mainClass == null) {// TODO:: Try with @ApplicationModuleTest -> main class
